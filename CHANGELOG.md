@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] - 2026-04-05
+
+### Fixed
+- Monitor swap selection logic now preserves the selected monitor by identity after drag-and-drop and left/right swaps, avoiding incorrect selection due to list reordering.
+
+### Changed
+- Added project contribution guidelines for human and AI contributors, including mandatory safety and quality rules for AI-generated code changes.
+
 ## [0.3.0] - 2026-04-05
 
 ### Added
