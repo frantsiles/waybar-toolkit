@@ -147,6 +147,26 @@ SORT_STATE = "State"
 # Refresh interval (ms)
 REFRESH_MS = 2000
 
+class ProcessListItem(GObject.Object):
+    """Typed item for the process list model."""
+
+    def __init__(
+        self,
+        kind: str,
+        process: ProcessInfo | None = None,
+        group: UserGroup | None = None,
+        depth: int = 0,
+        has_children: bool = False,
+        expanded: bool = True,
+    ) -> None:
+        super().__init__()
+        self.kind = kind
+        self.process = process
+        self.group = group
+        self.depth = depth
+        self.has_children = has_children
+        self.expanded = expanded
+
 
 class ProcessWindow(Gtk.Window):
     """The Process Manager window."""
@@ -166,6 +186,7 @@ class ProcessWindow(Gtk.Window):
         self._search_text: str = ""
         self._collapsed_pids: set[int] = set()
         self._collapsed_users: set[str] = set()
+        self._is_rebuilding_list: bool = False
         self._refresh_id: int = 0
 
         # Load CSS
@@ -273,10 +294,22 @@ class ProcessWindow(Gtk.Window):
         scroll.set_vexpand(True)
         main_box.append(scroll)
 
-        self._list_box = Gtk.ListBox()
-        self._list_box.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._list_box.connect("row-selected", self._on_row_selected)
-        scroll.set_child(self._list_box)
+        self._list_store = Gio.ListStore.new(ProcessListItem)
+        self._selection_model = Gtk.SingleSelection(model=self._list_store)
+        self._selection_model.set_autoselect(False)
+        self._selection_model.connect(
+            "notify::selected-item", self._on_selected_item_changed
+        )
+
+        self._list_factory = Gtk.SignalListItemFactory()
+        self._list_factory.connect("bind", self._on_bind_list_item)
+
+        self._list_view = Gtk.ListView(
+            model=self._selection_model,
+            factory=self._list_factory,
+        )
+        self._list_view.set_vexpand(True)
+        scroll.set_child(self._list_view)
 
         # --- Separator ---
         main_box.append(Gtk.Separator())
@@ -378,12 +411,10 @@ class ProcessWindow(Gtk.Window):
 
     def _rebuild_list(self) -> None:
         """Rebuild the process list based on view mode, sort, and filter."""
+        selected_pid = self._selected_pid
+        self._is_rebuilding_list = True
         # Clear
-        child = self._list_box.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            self._list_box.remove(child)
-            child = nxt
+        self._list_store.remove_all()
 
         # Filter
         filtered = self._filter_processes(self._processes)
@@ -394,6 +425,27 @@ class ProcessWindow(Gtk.Window):
             self._build_user_view(filtered)
         else:
             self._build_flat_view(filtered)
+
+        # Preserve previous selection when possible
+        selected_index = Gtk.INVALID_LIST_POSITION
+        for i in range(self._list_store.get_n_items()):
+            item = self._list_store.get_item(i)
+            if (
+                isinstance(item, ProcessListItem)
+                and item.kind == "process"
+                and item.process is not None
+                and item.process.pid == selected_pid
+            ):
+                selected_index = i
+                break
+
+        self._selection_model.set_selected(selected_index)
+        self._is_rebuilding_list = False
+
+        # Keep details panel populated even if the selected process is not
+        # currently visible in the active view/filter.
+        if selected_pid > 0:
+            self._selected_pid = selected_pid
 
     def _filter_processes(
         self, procs: list[ProcessInfo]
@@ -430,21 +482,24 @@ class ProcessWindow(Gtk.Window):
         """Build a flat, sorted list."""
         sorted_procs = self._sort_processes(procs)
         for proc in sorted_procs:
-            row = self._make_process_row(proc)
-            self._list_box.append(row)
+            self._list_store.append(
+                ProcessListItem(kind="process", process=proc)
+            )
 
     def _build_tree_view(self, procs: list[ProcessInfo]) -> None:
         """Build a tree view with indentation."""
         roots = build_process_tree(procs)
         flat_rows = flatten_tree(roots, self._collapsed_pids)
         for flat_row in flat_rows:
-            row = self._make_process_row(
-                flat_row.process,
-                depth=flat_row.depth,
-                has_children=flat_row.has_children,
-                expanded=flat_row.expanded,
+            self._list_store.append(
+                ProcessListItem(
+                    kind="process",
+                    process=flat_row.process,
+                    depth=flat_row.depth,
+                    has_children=flat_row.has_children,
+                    expanded=flat_row.expanded,
+                )
             )
-            self._list_box.append(row)
 
     def _build_user_view(self, procs: list[ProcessInfo]) -> None:
         """Build a grouped-by-user view."""
@@ -453,35 +508,65 @@ class ProcessWindow(Gtk.Window):
             is_collapsed = group.user in self._collapsed_users
 
             # Group header row
-            header = self._make_group_header(group, not is_collapsed)
-            self._list_box.append(header)
+            self._list_store.append(
+                ProcessListItem(
+                    kind="group",
+                    group=group,
+                    expanded=not is_collapsed,
+                )
+            )
 
             if not is_collapsed:
                 sorted_procs = self._sort_processes(group.processes)
                 for proc in sorted_procs:
-                    row = self._make_process_row(proc, depth=1)
-                    self._list_box.append(row)
+                    self._list_store.append(
+                        ProcessListItem(
+                            kind="process", process=proc, depth=1
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Row widgets
     # ------------------------------------------------------------------
 
-    def _make_process_row(
+    def _on_bind_list_item(
+        self,
+        _factory: Gtk.SignalListItemFactory,
+        list_item: Gtk.ListItem,
+    ) -> None:
+        """Bind model item to a row widget in the ListView."""
+        item = list_item.get_item()
+        if not isinstance(item, ProcessListItem):
+            list_item.set_child(None)
+            return
+
+        if item.kind == "group" and item.group is not None:
+            child = self._make_group_header_widget(item.group, item.expanded)
+        elif item.process is not None:
+            child = self._make_process_row_widget(
+                item.process,
+                depth=item.depth,
+                has_children=item.has_children,
+                expanded=item.expanded,
+            )
+        else:
+            child = Gtk.Box()
+
+        list_item.set_child(child)
+
+    def _make_process_row_widget(
         self,
         proc: ProcessInfo,
         depth: int = 0,
         has_children: bool = False,
         expanded: bool = True,
-    ) -> Gtk.ListBoxRow:
+    ) -> Gtk.Widget:
         """Create a row widget for a process."""
-        row = Gtk.ListBoxRow()
-        row.add_css_class("process-row")
-        row._pid = proc.pid  # Store for selection
 
         box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=0
         )
-        row.set_child(box)
+        box.add_css_class("process-row")
 
         # PID column
         pid_label = Gtk.Label(label=str(proc.pid))
@@ -572,21 +657,17 @@ class ProcessWindow(Gtk.Window):
         state_label.add_css_class("info-label")
         box.append(state_label)
 
-        return row
+        return box
 
-    def _make_group_header(
+    def _make_group_header_widget(
         self, group: UserGroup, expanded: bool
-    ) -> Gtk.ListBoxRow:
+    ) -> Gtk.Widget:
         """Create a group header row for user view."""
-        row = Gtk.ListBoxRow()
-        row._pid = -1  # Not a process row
-        row._group_user = group.user
 
         box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=8
         )
         box.add_css_class("group-header")
-        row.set_child(box)
 
         arrow = "▾" if expanded else "▸"
         toggle_btn = Gtk.Button(label=f"{arrow} {group.user}")
@@ -605,7 +686,7 @@ class ProcessWindow(Gtk.Window):
         stats.add_css_class("info-label")
         box.append(stats)
 
-        return row
+        return box
 
     # ------------------------------------------------------------------
     # Details panel
@@ -692,10 +773,17 @@ class ProcessWindow(Gtk.Window):
         self._build_headers()
         self._rebuild_list()
 
-    def _on_row_selected(self, listbox, row) -> None:
-        if row and hasattr(row, "_pid") and row._pid > 0:
-            self._selected_pid = row._pid
-            self._update_details(row._pid)
+    def _on_selected_item_changed(self, model, _pspec) -> None:
+        if self._is_rebuilding_list:
+            return
+        item = model.get_selected_item()
+        if (
+            isinstance(item, ProcessListItem)
+            and item.kind == "process"
+            and item.process is not None
+        ):
+            self._selected_pid = item.process.pid
+            self._update_details(self._selected_pid)
 
     def _on_send_signal(self, *_args) -> None:
         if self._selected_pid <= 0:
