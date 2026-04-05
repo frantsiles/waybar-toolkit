@@ -1,0 +1,14 @@
+// Add this to your Waybar config (usually ~/.config/waybar/config.jsonc)
+//
+// 1. Add "custom/toolkit" to your "modules-right" (or left/center) array
+// 2. Add this module definition:
+
+{
+    "custom/toolkit": {
+        "format": "🔧",
+        "tooltip": true,
+        "tooltip-format": "Waybar Toolkit",
+        "on-click": "waybar-toolkit",
+        "on-click-right": "waybar-toolkit --monitors"
+    }
+}
