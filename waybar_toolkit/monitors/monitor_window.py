@@ -500,18 +500,8 @@ class MonitorWindow(Gtk.Window):
 
     def _on_drag_swap(self, idx_a: int, idx_b: int) -> None:
         """Handle drag-and-drop swap from the canvas."""
-        self._monitors = self._backend.swap_positions(
-            self._monitors, idx_a, idx_b
-        )
-        self._canvas.set_monitors(self._monitors)
-        # Select the dragged monitor at its new position
-        self._canvas.set_selected(0)  # will be first in sorted order
-        for i, m in enumerate(self._monitors):
-            if i == idx_a or m == self._monitors[min(idx_a, len(self._monitors) - 1)]:
-                self._canvas.set_selected(i)
-                break
-        self._update_controls(self._canvas.get_selected())
-        self._set_status("Swapped — click Apply to confirm")
+        if self._swap_and_select(idx_a, idx_b, selected_idx=idx_a):
+            self._set_status("Swapped — click Apply to confirm")
 
     def _on_identify(self, *_args) -> None:
         show_identify(self._app, self._monitors)
@@ -522,15 +512,8 @@ class MonitorWindow(Gtk.Window):
         pos = next((i for i, (orig_i, _) in enumerate(sorted_mons) if orig_i == idx), -1)
         if pos > 0:
             other_idx = sorted_mons[pos - 1][0]
-            self._monitors = self._backend.swap_positions(
-                self._monitors, idx, other_idx
-            )
-            self._canvas.set_monitors(self._monitors)
-            # Keep selection on the same monitor
-            new_idx = self._monitors.index(self._monitors[idx]) if idx < len(self._monitors) else 0
-            self._canvas.set_selected(new_idx)
-            self._update_controls(new_idx)
-            self._set_status("Swapped — click Apply to confirm")
+            if self._swap_and_select(idx, other_idx, selected_idx=idx):
+                self._set_status("Swapped — click Apply to confirm")
 
     def _on_swap_right(self, *_args) -> None:
         idx = self._canvas.get_selected()
@@ -538,14 +521,8 @@ class MonitorWindow(Gtk.Window):
         pos = next((i for i, (orig_i, _) in enumerate(sorted_mons) if orig_i == idx), -1)
         if pos < len(sorted_mons) - 1:
             other_idx = sorted_mons[pos + 1][0]
-            self._monitors = self._backend.swap_positions(
-                self._monitors, idx, other_idx
-            )
-            self._canvas.set_monitors(self._monitors)
-            new_idx = self._monitors.index(self._monitors[idx]) if idx < len(self._monitors) else 0
-            self._canvas.set_selected(new_idx)
-            self._update_controls(new_idx)
-            self._set_status("Swapped — click Apply to confirm")
+            if self._swap_and_select(idx, other_idx, selected_idx=idx):
+                self._set_status("Swapped — click Apply to confirm")
 
     def _on_apply(self, *_args) -> None:
         try:
@@ -596,6 +573,35 @@ class MonitorWindow(Gtk.Window):
         for mon in sorted_mons:
             mon.x = x
             x += mon.scaled_width
+    def _swap_and_select(
+        self, idx_a: int, idx_b: int, selected_idx: int
+    ) -> bool:
+        """Swap two monitors and preserve selection by monitor identity."""
+        if (
+            idx_a < 0
+            or idx_b < 0
+            or selected_idx < 0
+            or idx_a >= len(self._monitors)
+            or idx_b >= len(self._monitors)
+            or selected_idx >= len(self._monitors)
+        ):
+            return False
+
+        selected_mon = self._monitors[selected_idx]
+
+        self._monitors = self._backend.swap_positions(
+            self._monitors, idx_a, idx_b
+        )
+        self._canvas.set_monitors(self._monitors)
+
+        try:
+            new_idx = self._monitors.index(selected_mon)
+        except ValueError:
+            new_idx = 0
+
+        self._canvas.set_selected(new_idx)
+        self._update_controls(new_idx)
+        return True
 
     def _set_status(self, text: str) -> None:
         self._status_label.set_text(text)
