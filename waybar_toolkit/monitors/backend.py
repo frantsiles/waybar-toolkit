@@ -13,6 +13,22 @@ from dataclasses import dataclass, field
 from waybar_toolkit.utils.compositor import Compositor, detect_compositor, has_command
 
 
+class MonitorBackendError(RuntimeError):
+    """Base error for monitor backend operations."""
+
+
+class MonitorBackendUnavailableError(MonitorBackendError):
+    """Raised when no supported monitor backend is available."""
+
+
+class MonitorDetectionError(MonitorBackendError):
+    """Raised when monitor discovery fails."""
+
+
+class MonitorApplyError(MonitorBackendError):
+    """Raised when monitor apply operations fail."""
+
+
 @dataclass
 class MonitorMode:
     """A display mode (resolution + refresh rate)."""
@@ -136,9 +152,14 @@ def _parse_hyprland_monitors(data: list[dict]) -> list[Monitor]:
 
 def get_monitors_hyprland() -> list[Monitor]:
     """Query monitors via hyprctl."""
-    raw = _run(["hyprctl", "monitors", "-j"])
-    data = json.loads(raw)
-    return _parse_hyprland_monitors(data)
+    try:
+        raw = _run(["hyprctl", "monitors", "-j"])
+        data = json.loads(raw)
+        return _parse_hyprland_monitors(data)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise MonitorDetectionError(
+            "Failed to query monitors via hyprctl"
+        ) from exc
 
 
 def _hyprctl_monitor_arg(mon: Monitor) -> str:
@@ -151,7 +172,12 @@ def _hyprctl_monitor_arg(mon: Monitor) -> str:
 def apply_monitor_hyprland(mon: Monitor) -> None:
     """Apply monitor configuration via hyprctl keyword."""
     cmd = ["hyprctl", "keyword", "monitor", _hyprctl_monitor_arg(mon)]
-    _run(cmd)
+    try:
+        _run(cmd)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MonitorApplyError(
+            f"Failed to apply monitor configuration for {mon.name}"
+        ) from exc
 
 
 def apply_all_hyprland(monitors: list[Monitor]) -> None:
@@ -160,7 +186,12 @@ def apply_all_hyprland(monitors: list[Monitor]) -> None:
         f"keyword monitor {_hyprctl_monitor_arg(mon)}" for mon in monitors
     ]
     cmd = ["hyprctl", "--batch", ";".join(batch_cmds)]
-    _run(cmd)
+    try:
+        _run(cmd)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MonitorApplyError(
+            "Failed to apply monitor configuration batch"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +306,13 @@ def _parse_wlr_randr_output(output: str) -> list[Monitor]:
 
 def get_monitors_wlr() -> list[Monitor]:
     """Query monitors via wlr-randr."""
-    raw = _run(["wlr-randr"])
-    return _parse_wlr_randr_output(raw)
+    try:
+        raw = _run(["wlr-randr"])
+        return _parse_wlr_randr_output(raw)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MonitorDetectionError(
+            "Failed to query monitors via wlr-randr"
+        ) from exc
 
 
 def apply_monitor_wlr(mon: Monitor) -> None:
@@ -303,7 +339,12 @@ def apply_monitor_wlr(mon: Monitor) -> None:
         7: "flipped-270",
     }
     cmd.extend(["--transform", transform_map.get(mon.transform, "normal")])
-    _run(cmd)
+    try:
+        _run(cmd)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MonitorApplyError(
+            f"Failed to apply monitor configuration for {mon.name}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +364,7 @@ class MonitorBackend:
             return get_monitors_hyprland()
         if has_command("wlr-randr"):
             return get_monitors_wlr()
-        raise RuntimeError(
+        raise MonitorBackendUnavailableError(
             "No supported monitor backend found. "
             "Install hyprctl (Hyprland) or wlr-randr."
         )
@@ -335,7 +376,9 @@ class MonitorBackend:
         elif has_command("wlr-randr"):
             apply_monitor_wlr(monitor)
         else:
-            raise RuntimeError("No supported backend to apply monitor config.")
+            raise MonitorBackendUnavailableError(
+                "No supported backend to apply monitor config."
+            )
 
     def apply_all(self, monitors: list[Monitor]) -> None:
         """Apply configuration for all monitors atomically."""

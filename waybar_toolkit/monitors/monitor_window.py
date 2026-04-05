@@ -1,13 +1,21 @@
 """Monitor Manager window — view, identify, and configure monitors."""
 
 from __future__ import annotations
+import logging
 
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, GLib, Pango  # noqa: E402
-
-from waybar_toolkit.monitors.backend import Monitor, MonitorBackend, MonitorMode
+from gi.repository import Gtk, GLib  # noqa: E402
+from waybar_toolkit.monitors.backend import (
+    Monitor,
+    MonitorApplyError,
+    MonitorBackend,
+    MonitorBackendError,
+    MonitorBackendUnavailableError,
+    MonitorDetectionError,
+    MonitorMode,
+)
 from waybar_toolkit.monitors.brightness import BrightnessBackend
 from waybar_toolkit.monitors.monitor_canvas import MonitorCanvas
 from waybar_toolkit.monitors.identify import show_identify
@@ -94,6 +102,7 @@ CSS = """
 }
 """
 
+logger = logging.getLogger(__name__)
 
 class MonitorWindow(Gtk.Window):
     """The Monitor Manager window."""
@@ -241,8 +250,14 @@ class MonitorWindow(Gtk.Window):
             self._update_controls(0)
             self._update_profiles_dropdown()
             self._set_status(f"{len(self._monitors)} monitor(s) detected")
-        except Exception as e:
-            self._set_status(f"Error: {e}")
+        except (MonitorBackendUnavailableError, MonitorDetectionError) as exc:
+            self._set_status(f"Error loading monitors: {exc}")
+        except MonitorBackendError:
+            logger.exception("Monitor backend error while loading monitors")
+            self._set_status("Error loading monitors")
+        except Exception:
+            logger.exception("Unexpected error while loading monitors")
+            self._set_status("Unexpected error loading monitors")
 
     def _update_profiles_dropdown(self) -> None:
         names = self._profiles.list_profiles()
@@ -530,8 +545,14 @@ class MonitorWindow(Gtk.Window):
             self._set_status("✔ Configuration applied!")
             # Refresh after a short delay to get the actual state
             GLib.timeout_add(500, self._load_monitors)
-        except Exception as e:
-            self._set_status(f"✘ Error applying: {e}")
+        except (MonitorBackendUnavailableError, MonitorApplyError) as exc:
+            self._set_status(f"✘ Error applying: {exc}")
+        except MonitorBackendError:
+            logger.exception("Monitor backend error while applying config")
+            self._set_status("✘ Error applying monitor configuration")
+        except Exception:
+            logger.exception("Unexpected error while applying monitor config")
+            self._set_status("✘ Unexpected error applying monitor config")
 
     def _on_save_profile(self, *_args) -> None:
         dialog = _PromptDialog(self, "Save Profile", "Profile name:")
