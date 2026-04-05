@@ -71,6 +71,47 @@ Or use the install script:
 ./scripts/install.sh
 ```
 
+### AUR (maintainer workflow)
+
+This repository includes AUR template files for a `-git` package at:
+
+- `packaging/aur/waybar-toolkit-git/PKGBUILD`
+- `packaging/aur/waybar-toolkit-git/.SRCINFO`
+
+Recommended flow before pushing to AUR (stable package workflow):
+
+1. Create a release branch/PR and update `CHANGELOG.md` + `pyproject.toml` version.
+2. Merge to `main`.
+3. Create and push tag:
+
+```bash
+git checkout main
+git pull
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+4. Create a GitHub Release from that tag and validate install from source archive.
+5. Only after validation, update/publish AUR metadata.
+
+To publish/update on AUR:
+
+```bash
+# Clone your AUR package repo
+git clone ssh://aur@aur.archlinux.org/waybar-toolkit-git.git
+cd waybar-toolkit-git
+
+# Copy template files from this project
+cp /path/to/waybar-toolkit/packaging/aur/waybar-toolkit-git/PKGBUILD .
+cp /path/to/waybar-toolkit/packaging/aur/waybar-toolkit-git/.SRCINFO .
+
+# Regenerate .SRCINFO (recommended) and publish
+makepkg --printsrcinfo > .SRCINFO
+git add PKGBUILD .SRCINFO
+git commit -m "update package"
+git push
+```
+
 ### From source (any distro)
 
 ```bash
