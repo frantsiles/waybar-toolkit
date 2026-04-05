@@ -22,6 +22,7 @@ class ProcessSnapshotError(ProcessBackendError):
 
 class SystemStatsError(ProcessBackendError):
     """Raised when system stats collection fails."""
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -61,6 +62,15 @@ class SystemStats:
     load_avg: tuple[float, float, float]
     process_count: int
 
+
+@dataclass
+class _ProcStaticInfo:
+    """Cached process fields that rarely change while PID is alive."""
+
+    ppid: int
+    name: str
+    user: str
+    cmdline: str
 
 # ---------------------------------------------------------------------------
 # Signal definitions
@@ -116,10 +126,10 @@ def _parse_proc_stat_line(line: str) -> tuple[int, ...]:
     parts = line.split()
     return tuple(int(p) for p in parts[1:])
 
-
-def _read_proc_pid(pid: int) -> ProcessInfo | None:
-    """Read process info from /proc/<pid>/."""
-    pid_dir = PROC / str(pid)
+def _read_proc_stat_snapshot(
+    pid_dir: Path,
+) -> tuple[str, int, str, int, int, int] | None:
+    """Read dynamic process fields from /proc/<pid>/stat."""
 
     # --- /proc/<pid>/stat ---
     stat_text = _read_file(pid_dir / "stat")
@@ -144,44 +154,29 @@ def _read_proc_pid(pid: int) -> ProcessInfo | None:
     utime = int(fields[11]) # index 13
     stime = int(fields[12]) # index 14
     threads = int(fields[17])  # index 19
+    return comm, ppid, state, utime, stime, threads
 
-    # --- /proc/<pid>/status (for UID and RSS) ---
-    status_text = _read_file(pid_dir / "status")
-    uid = 0
-    rss_kb = 0
-    if status_text:
-        for line in status_text.splitlines():
-            if line.startswith("Uid:"):
-                uid = int(line.split()[1])
-            elif line.startswith("VmRSS:"):
-                try:
-                    rss_kb = int(line.split()[1])
-                except (ValueError, IndexError):
-                    pass
 
-    # --- /proc/<pid>/cmdline ---
+def _read_proc_cmdline(pid_dir: Path, comm: str) -> str:
+    """Read process cmdline once; fallback to [comm] if missing."""
     cmdline_text = _read_file(pid_dir / "cmdline")
     if cmdline_text:
         cmdline = cmdline_text.replace("\x00", " ").strip()
-    else:
-        cmdline = f"[{comm}]"
+        if cmdline:
+            return cmdline
+    return f"[{comm}]"
 
-    user = _uid_to_user(uid)
 
-    return ProcessInfo(
-        pid=pid,
-        ppid=ppid,
-        name=comm,
-        user=user,
-        state=state,
-        cpu_percent=0.0,  # Calculated later via delta
-        mem_percent=0.0,  # Calculated later with total mem
-        mem_rss_kb=rss_kb,
-        threads=threads,
-        cmdline=cmdline if cmdline else f"[{comm}]",
-        _utime=utime,
-        _stime=stime,
-    )
+def _read_proc_rss_kb(pid_dir: Path, page_size_kb: int) -> int:
+    """Read RSS memory from /proc/<pid>/statm in KiB."""
+    statm_text = _read_file(pid_dir / "statm")
+    if not statm_text:
+        return 0
+    try:
+        rss_pages = int(statm_text.split()[1])
+    except (ValueError, IndexError):
+        return 0
+    return rss_pages * page_size_kb
 
 
 # ---------------------------------------------------------------------------
@@ -195,10 +190,12 @@ class ProcessBackend:
     def __init__(self) -> None:
         # Previous snapshots for CPU% delta calculation
         self._prev_procs: dict[int, tuple[int, int]] = {}  # pid → (utime, stime)
+        self._static_procs: dict[int, _ProcStaticInfo] = {}
         self._prev_cpu_jiffies: list[tuple[int, ...]] = []  # per core
         self._prev_total_jiffies: tuple[int, ...] = ()
         self._prev_time: float = 0.0
         self._hz: int = os.sysconf("SC_CLK_TCK")  # Usually 100
+        self._page_size_kb: int = max(1, os.sysconf("SC_PAGE_SIZE") // 1024)
 
     # ------------------------------------------------------------------
     # Processes
@@ -218,9 +215,40 @@ class ProcessBackend:
                 if not entry.name.isdigit():
                     continue
                 pid = int(entry.name)
-                info = _read_proc_pid(pid)
-                if info is None:
+                snapshot = _read_proc_stat_snapshot(entry)
+                if snapshot is None:
                     continue
+                comm, ppid, state, utime, stime, threads = snapshot
+
+                static_info = self._static_procs.get(pid)
+                if (
+                    static_info is None
+                    or static_info.name != comm
+                    or static_info.ppid != ppid
+                ):
+                    uid = entry.stat().st_uid
+                    static_info = _ProcStaticInfo(
+                        ppid=ppid,
+                        name=comm,
+                        user=_uid_to_user(uid),
+                        cmdline=_read_proc_cmdline(entry, comm),
+                    )
+                    self._static_procs[pid] = static_info
+
+                info = ProcessInfo(
+                    pid=pid,
+                    ppid=static_info.ppid,
+                    name=static_info.name,
+                    user=static_info.user,
+                    state=state,
+                    cpu_percent=0.0,
+                    mem_percent=0.0,
+                    mem_rss_kb=_read_proc_rss_kb(entry, self._page_size_kb),
+                    threads=threads,
+                    cmdline=static_info.cmdline,
+                    _utime=utime,
+                    _stime=stime,
+                )
 
                 # CPU% delta
                 if elapsed > 0 and pid in self._prev_procs:
@@ -246,6 +274,9 @@ class ProcessBackend:
             live_pids = {p.pid for p in procs}
             self._prev_procs = {
                 k: v for k, v in self._prev_procs.items() if k in live_pids
+            }
+            self._static_procs = {
+                k: v for k, v in self._static_procs.items() if k in live_pids
             }
 
             return procs
