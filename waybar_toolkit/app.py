@@ -11,6 +11,7 @@ from gi.repository import Gtk, Gio, GLib  # noqa: E402
 
 from waybar_toolkit.main_window import MainWindow
 from waybar_toolkit.monitors.monitor_window import MonitorWindow
+from waybar_toolkit.processes.process_window import ProcessWindow
 
 
 APP_ID = "dev.waybar-toolkit"
@@ -25,6 +26,7 @@ class WaybarToolkitApp(Gtk.Application):
             flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
         )
         self._direct_monitor = False
+        self._direct_processes = False
 
         # CLI options
         self.add_main_option(
@@ -35,11 +37,21 @@ class WaybarToolkitApp(Gtk.Application):
             "Open Monitor Manager directly",
             None,
         )
+        self.add_main_option(
+            "processes",
+            ord("p"),
+            GLib.OptionFlags.NONE,
+            GLib.OptionArg.NONE,
+            "Open Process Manager directly",
+            None,
+        )
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict()
         if options.contains("monitors"):
             self._direct_monitor = True
+        if options.contains("processes"):
+            self._direct_processes = True
         self.activate()
         return 0
 
@@ -52,6 +64,8 @@ class WaybarToolkitApp(Gtk.Application):
 
         if self._direct_monitor:
             win = MonitorWindow(self)
+        elif self._direct_processes:
+            win = ProcessWindow(self)
         else:
             win = MainWindow(self)
 

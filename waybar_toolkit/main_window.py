@@ -8,6 +8,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
 from waybar_toolkit.monitors.monitor_window import MonitorWindow
+from waybar_toolkit.processes.process_window import ProcessWindow
 
 
 CSS_HUB = """
@@ -107,6 +108,13 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         )
 
+        grid.append(
+            self._make_utility_button(
+                "⚙", "Processes", "View & manage running processes",
+                self._open_processes,
+            )
+        )
+
         # Placeholder for future utilities
         grid.append(
             self._make_utility_button(
@@ -150,4 +158,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _open_monitors(self) -> None:
         win = MonitorWindow(self._app)
+        win.present()
+
+    def _open_processes(self) -> None:
+        win = ProcessWindow(self._app)
         win.present()

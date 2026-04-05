@@ -33,6 +33,7 @@ Issues = "https://github.com/frantsiles/waybar-toolkit/issues"
 
 [project.scripts]
 waybar-toolkit = "waybar_toolkit.app:main"
+waybar-toolkit-stats = "waybar_toolkit.processes.waybar_stats:main"
 
 [tool.setuptools.packages.find]
 include = ["waybar_toolkit*"]

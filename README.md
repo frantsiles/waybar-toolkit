@@ -6,6 +6,19 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 
 ## Features
 
+### Process Manager
+- **Real-time system stats** — Live CPU and RAM charts with 2-minute history (Cairo rendering)
+- **Process list** — View all running processes with PID, name, user, CPU%, MEM%, and state
+- **Three view modes**:
+  - **Flat** — Sortable list (click column headers to sort by any field)
+  - **Tree** — Hierarchical parent→child view with expand/collapse
+  - **By User** — Grouped by user with collapsible sections and per-group stats
+- **Search & filter** — Instant search by process name, command, user, or PID
+- **Send signals** — SIGTERM, SIGKILL, SIGSTOP, SIGCONT, SIGHUP to selected process
+- **Process details** — Full command line, executable path, working directory, threads, memory, open FDs, context switches
+- **Waybar stats module** — `custom/stats` showing CPU/RAM in the bar with rich tooltip
+- **No external dependencies** — reads directly from `/proc` (no `psutil` required)
+
 ### Monitor Manager
 - **Visual layout** — See your monitors as proportional rectangles with resolution, scale, and model info
 - **Identify** — Flash a big number on each display (like Windows/KDE Plasma)
@@ -68,14 +81,21 @@ waybar-toolkit
 # Open Monitor Manager directly
 waybar-toolkit -m
 waybar-toolkit --monitors
+
+# Open Process Manager directly
+waybar-toolkit -p
+waybar-toolkit --processes
+
+# Print system stats as JSON (for Waybar)
+waybar-toolkit-stats
 ```
 
 ## Waybar Configuration
 
 Add to your Waybar config (`~/.config/waybar/config.jsonc`):
 
-1. Add `"custom/toolkit"` to your modules array (e.g. `"modules-right"`)
-2. Add the module definition:
+1. Add `"custom/toolkit"` and/or `"custom/stats"` to your modules array (e.g. `"modules-right"`)
+2. Add the module definitions:
 
 ```json
 "custom/toolkit": {
@@ -83,7 +103,15 @@ Add to your Waybar config (`~/.config/waybar/config.jsonc`):
     "tooltip": true,
     "tooltip-format": "Waybar Toolkit",
     "on-click": "waybar-toolkit",
-    "on-click-right": "waybar-toolkit --monitors"
+    "on-click-right": "waybar-toolkit --monitors",
+    "on-click-middle": "waybar-toolkit --processes"
+},
+"custom/stats": {
+    "exec": "waybar-toolkit-stats",
+    "return-type": "json",
+    "interval": 2,
+    "tooltip": true,
+    "on-click": "waybar-toolkit --processes"
 }
 ```
 
@@ -101,14 +129,20 @@ waybar_toolkit/
 ├── main_window.py            # Utility hub window
 ├── monitors/
 │   ├── backend.py            # hyprctl/wlr-randr abstraction
+│   ├── brightness.py         # Brightness/contrast (brightnessctl + ddcutil)
 │   ├── monitor_canvas.py     # Visual monitor layout (Cairo)
 │   ├── monitor_window.py     # Monitor Manager window
 │   ├── identify.py           # Identify overlay per monitor
 │   └── profiles.py           # Save/load monitor profiles
+├── processes/
+│   ├── backend.py            # /proc reader, signals, system stats
+│   ├── charts.py             # Real-time CPU/RAM charts (Cairo)
+│   ├── process_window.py     # Process Manager window
+│   ├── tree.py               # Process tree & user grouping
+│   └── waybar_stats.py       # JSON output for Waybar module
 └── utils/
     └── compositor.py         # Compositor detection
 ```
-
 ## Built With AI Assistance
 
 This project was built with the help of **Oz (Warp AI)** as a development assistant. The architecture, code, and implementation were produced collaboratively — the author provided the vision, requirements, and testing, while the AI assisted with Python/GTK4 code generation.
