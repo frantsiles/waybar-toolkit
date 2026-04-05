@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from waybar_toolkit.processes.backend import ProcessInfo
-
 
 # ---------------------------------------------------------------------------
 # Tree node
@@ -79,7 +77,7 @@ class FlatRow:
 
 def flatten_tree(
     roots: list[TreeNode],
-    collapsed: Optional[set[int]] = None,
+    collapsed: set[int] | None = None,
 ) -> list[FlatRow]:
     """Flatten the tree into a list of rows with depth info.
 

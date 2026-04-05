@@ -176,6 +176,22 @@ Transparency matters. This is open source because the goal is to help the Waylan
 
 Contributions are welcome! Feel free to open issues or PRs.
 
+## Development Quality Checks
+
+Install dev tooling:
+
+```bash
+pip install --user --break-system-packages -e ".[dev]"
+```
+
+Run checks:
+
+```bash
+python -m ruff check .
+python -m pytest
+python -m mypy
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE)

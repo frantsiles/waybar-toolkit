@@ -1,4 +1,12 @@
 # Changelog
+## [Unreleased]
+
+### Added
+- Baseline quality tooling configuration for `pytest`, `ruff`, and `mypy` in project metadata.
+- Initial unit tests for process tree/grouping logic and backend helper behavior.
+
+### Changed
+- Contributor workflow now includes explicit lint, format, test, and typecheck commands.
 
 ## [0.3.1] - 2026-04-05
 

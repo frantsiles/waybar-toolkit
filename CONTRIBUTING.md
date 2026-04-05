@@ -17,8 +17,13 @@ Thanks for contributing to Waybar Toolkit.
 - Keep UI text concise and status messages actionable.
 
 ## Quality checks before PR
-- Run syntax checks for touched modules (`python -m py_compile ...`).
-- If you add logic with non-trivial behavior, add/update tests when test infrastructure exists.
+- Install dev tooling once: `pip install --user -e ".[dev]"`.
+- Run linting: `python -m ruff check .`.
+- Run formatting check/fix as needed: `python -m ruff format .`.
+- Run tests: `python -m pytest`.
+- Run type checks: `python -m mypy`.
+- Run syntax checks for touched modules (`python -m py_compile ...`) when iterating quickly.
+- If you add logic with non-trivial behavior, add/update tests in `tests/`.
 - Review your own diff and remove unrelated changes.
 - Update `CHANGELOG.md` for user-visible behavior changes.
 - Keep project metadata version aligned with release notes when preparing a release.

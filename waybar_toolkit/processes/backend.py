@@ -10,8 +10,6 @@ import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -94,7 +92,7 @@ def _uid_to_user(uid: int) -> str:
 PROC = Path("/proc")
 
 
-def _read_file(path: Path) -> Optional[str]:
+def _read_file(path: Path) -> str | None:
     """Read a proc file, returning None on any error."""
     try:
         return path.read_text()
@@ -108,7 +106,7 @@ def _parse_proc_stat_line(line: str) -> tuple[int, ...]:
     return tuple(int(p) for p in parts[1:])
 
 
-def _read_proc_pid(pid: int) -> Optional[ProcessInfo]:
+def _read_proc_pid(pid: int) -> ProcessInfo | None:
     """Read process info from /proc/<pid>/."""
     pid_dir = PROC / str(pid)
 
@@ -327,7 +325,7 @@ class ProcessBackend:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_process_details(pid: int) -> Optional[dict]:
+    def get_process_details(pid: int) -> dict | None:
         """Read extended details for a single process."""
         pid_dir = PROC / str(pid)
         if not pid_dir.exists():
