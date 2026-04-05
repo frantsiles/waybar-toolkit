@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] - 2026-04-05
+
+### Added
+- **Process Manager** — Full-featured process viewer and manager
+  - Real-time CPU and RAM charts with ~2min history (Cairo rendering)
+  - Three view modes: Flat (sortable), Tree (hierarchical), By User (grouped)
+  - Clickable column headers for sorting by PID, Name, User, CPU%, MEM%, State
+  - Search/filter by process name, command, user, or PID
+  - Send signals to processes: SIGTERM, SIGKILL, SIGSTOP, SIGCONT, SIGHUP
+  - Detailed process info panel: cmdline, exe, cwd, threads, memory, FDs, context switches
+  - Auto-refresh every 2 seconds
+- **Waybar stats module** (`custom/stats`)
+  - Shows live CPU/RAM usage in Waybar bar text
+  - Rich tooltip with CPU%, RAM usage, process count, load average, uptime
+  - CSS classes for conditional styling: `normal`, `warning`, `critical`
+  - Entry point: `waybar-toolkit-stats`
+- New CLI flag `-p` / `--processes` to open Process Manager directly
+- Middle-click on toolkit Waybar module opens Process Manager
+- Process backend reads directly from `/proc` — no `psutil` dependency
+
 ## [0.2.0] - 2026-04-05
 
 ### Added

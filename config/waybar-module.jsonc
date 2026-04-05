@@ -1,7 +1,7 @@
 // Add this to your Waybar config (usually ~/.config/waybar/config.jsonc)
 //
-// 1. Add "custom/toolkit" to your "modules-right" (or left/center) array
-// 2. Add this module definition:
+// 1. Add "custom/toolkit" and/or "custom/stats" to your modules array
+// 2. Add the module definitions:
 
 {
     "custom/toolkit": {
@@ -9,6 +9,14 @@
         "tooltip": true,
         "tooltip-format": "Waybar Toolkit",
         "on-click": "waybar-toolkit",
-        "on-click-right": "waybar-toolkit --monitors"
+        "on-click-right": "waybar-toolkit --monitors",
+        "on-click-middle": "waybar-toolkit --processes"
+    },
+    "custom/stats": {
+        "exec": "waybar-toolkit-stats",
+        "return-type": "json",
+        "interval": 2,
+        "tooltip": true,
+        "on-click": "waybar-toolkit --processes"
     }
 }
