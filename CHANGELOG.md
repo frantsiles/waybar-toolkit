@@ -12,6 +12,9 @@
 - Visual section "☀ Brightness & Display" in monitor controls panel
 - Graceful fallback: shows "not available" for unsupported displays
 
+### Known Issues
+- DDC/CI write operations do not work on NVIDIA proprietary drivers (brightness/contrast read-only on external monitors). This is an upstream NVIDIA driver limitation that also affects Waybar's backlight module. Workaround: install `ddcci-driver-linux-dkms` from AUR or use the monitor's physical OSD buttons.
+
 ## [0.1.1] - 2026-04-05
 
 ### Added

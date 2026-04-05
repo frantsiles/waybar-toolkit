@@ -13,7 +13,7 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 - **Swap positions** — Move monitors left/right with toolbar buttons
 - **Brightness control** — Adjust brightness per monitor in real time
   - Laptop (eDP): via `brightnessctl` (backlight)
-  - External monitors: via `ddcutil` (DDC/CI)
+  - External monitors: via `ddcutil` (DDC/CI) — see [Known Limitations](#known-limitations)
 - **Contrast control** — Adjust contrast on DDC/CI-capable external monitors
 - **Configure** — Change resolution, refresh rate, scale, and transform per monitor
 - **Apply** — Instantly apply changes via `hyprctl` or `wlr-randr`
@@ -116,6 +116,21 @@ waybar_toolkit/
 └── utils/
     └── compositor.py         # Compositor detection
 ```
+
+## Known Limitations
+
+### NVIDIA + DDC/CI (external monitor brightness/contrast)
+
+On systems with **NVIDIA proprietary drivers**, `ddcutil` can **read** DDC/CI values (brightness, contrast) from external monitors but **cannot write** them. This is a known NVIDIA driver limitation that also affects Waybar's built-in backlight module — it only works on the laptop's primary display (eDP), not on external monitors.
+
+This means:
+- **Laptop display (eDP)**: Brightness slider works perfectly via `brightnessctl`
+- **External monitors (HDMI/DP)**: Brightness and contrast sliders are displayed and read the current values, but changes will not take effect on NVIDIA
+
+**Workaround options:**
+- Install `ddcci-driver-linux-dkms` (AUR) which creates kernel backlight devices for external monitors, bypassing the `ddcutil` write issue
+- Use the monitor's physical OSD buttons to adjust brightness/contrast
+- On AMD/Intel GPUs, `ddcutil` write should work without issues
 
 ## Built With AI Assistance
 
