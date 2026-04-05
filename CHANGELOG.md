@@ -1,5 +1,6 @@
 # Changelog
 ## [Unreleased]
+## [0.3.2] - 2026-04-05
 
 ### Added
 - Baseline quality tooling configuration for `pytest`, `ruff`, and `mypy` in project metadata.
@@ -7,7 +8,10 @@
 
 ### Changed
 - Contributor workflow now includes explicit lint, format, test, and typecheck commands.
+- Process refresh now reduces per-cycle `/proc` overhead by caching static per-PID metadata and using lighter dynamic reads.
 
+### Fixed
+- Replaced broad UI `except Exception` handling in critical monitor/process paths with domain-specific backend errors plus structured logging for unexpected failures.
 ## [0.3.1] - 2026-04-05
 
 ### Fixed

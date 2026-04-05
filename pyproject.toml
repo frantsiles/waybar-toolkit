@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "waybar-toolkit"
-version = "0.3.1"
+version = "0.3.2"
 description = "A Wayland utility hub with Waybar integration — monitor management and more"
 readme = "README.md"
 license = {text = "MIT"}
