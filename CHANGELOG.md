@@ -23,6 +23,21 @@
 ## [0.2.0] - 2026-04-05
 
 ### Added
+- Brightness control per monitor
+  - Laptop displays (eDP): via `brightnessctl` backlight
+  - External monitors: via `ddcutil` DDC/CI
+  - Real-time slider with debounced apply (50ms backlight, 300ms DDC)
+- Contrast control for DDC/CI-capable external monitors
+- New `brightness.py` backend with auto-detection of backlight and DDC devices
+- Visual section "☀ Brightness & Display" in monitor controls panel
+- Graceful fallback: shows "not available" for unsupported displays
+
+### Known Issues
+- DDC/CI write operations do not work on NVIDIA proprietary drivers (brightness/contrast read-only on external monitors). This is an upstream NVIDIA driver limitation that also affects Waybar's backlight module. Workaround: install `ddcci-driver-linux-dkms` from AUR or use the monitor's physical OSD buttons.
+
+## [0.1.1] - 2026-04-05
+
+### Added
 - Drag-and-drop monitor reordering in visual layout
   - Grab any monitor and drag it to swap with its neighbor
   - Visual feedback: drag shadow, drop indicator line, grab cursor
