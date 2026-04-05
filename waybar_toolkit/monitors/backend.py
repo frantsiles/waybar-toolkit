@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional
 
 from waybar_toolkit.utils.compositor import Compositor, detect_compositor, has_command
 
@@ -172,7 +171,7 @@ def apply_all_hyprland(monitors: list[Monitor]) -> None:
 def _parse_wlr_randr_output(output: str) -> list[Monitor]:
     """Parse wlr-randr text output into Monitor objects."""
     monitors: list[Monitor] = []
-    current: Optional[dict] = None
+    current: dict | None = None
     modes: list[MonitorMode] = []
 
     for line in output.splitlines():
