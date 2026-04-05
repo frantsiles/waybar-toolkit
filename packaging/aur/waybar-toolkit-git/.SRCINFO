@@ -1,0 +1,23 @@
+pkgbase = waybar-toolkit-git
+	pkgdesc = Wayland utility hub with Waybar integration (monitor + process tools) - git version
+	pkgver = r1.g0000000
+	pkgrel = 1
+	url = https://github.com/frantsiles/waybar-toolkit
+	arch = any
+	license = MIT
+	makedepends = git
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-wheel
+	depends = python
+	depends = python-gobject
+	depends = gtk4
+	optdepends = brightnessctl: laptop backlight brightness control
+	optdepends = ddcutil: external monitor brightness/contrast via DDC/CI
+	provides = waybar-toolkit
+	conflicts = waybar-toolkit
+	source = git+https://github.com/frantsiles/waybar-toolkit.git
+	sha256sums = SKIP
+
+pkgname = waybar-toolkit-git
