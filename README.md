@@ -120,6 +120,53 @@ cd waybar-toolkit
 pip install --user .
 ```
 
+### Install directly from GitHub release tag (recommended on Arch: pipx)
+
+```bash
+sudo pacman -S python-pipx
+pipx ensurepath
+pipx install "git+https://github.com/frantsiles/waybar-toolkit.git@v0.3.2"
+```
+
+After `pipx ensurepath`, open a new terminal or run:
+
+```bash
+source ~/.bashrc
+```
+
+Then verify:
+
+```bash
+command -v waybar-toolkit
+command -v waybar-toolkit-stats
+```
+
+## Troubleshooting
+
+### `error: externally-managed-environment` on Arch
+
+This is expected (PEP 668) when trying to install non-pacman Python apps with plain `pip` into the system/user environment.  
+Use `pipx` or a virtualenv instead.
+
+### `command not found` after `pipx install`
+
+Your shell may not have reloaded `PATH` yet:
+
+```bash
+source ~/.bashrc
+```
+
+or open a new terminal.
+
+### `pipx` warns about missing/incorrect app symlinks
+
+If old wrappers already exist in `~/.local/bin`, recreate them via `pipx`:
+
+```bash
+rm -f ~/.local/bin/waybar-toolkit ~/.local/bin/waybar-toolkit-stats
+pipx reinstall waybar-toolkit
+```
+
 ## Usage
 
 ```bash
