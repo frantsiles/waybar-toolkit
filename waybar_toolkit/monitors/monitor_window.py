@@ -8,6 +8,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
 
 from waybar_toolkit.monitors.backend import Monitor, MonitorBackend, MonitorMode
+from waybar_toolkit.monitors.brightness import BrightnessBackend
 from waybar_toolkit.monitors.monitor_canvas import MonitorCanvas
 from waybar_toolkit.monitors.identify import show_identify
 from waybar_toolkit.monitors.profiles import ProfileManager
@@ -64,6 +65,33 @@ CSS = """
     font-size: 11px;
     color: alpha(@window_fg_color, 0.55);
 }
+.brightness-section {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background-color: @card_bg_color;
+}
+.brightness-label {
+    font-size: 12px;
+    color: @window_fg_color;
+    min-width: 40px;
+}
+.brightness-value {
+    font-size: 11px;
+    color: alpha(@window_fg_color, 0.7);
+    min-width: 32px;
+}
+.brightness-slider slider {
+    background-color: @accent_bg_color;
+}
+.brightness-slider trough {
+    background-color: alpha(@window_fg_color, 0.15);
+}
+.brightness-unsupported {
+    font-size: 11px;
+    font-style: italic;
+    color: alpha(@window_fg_color, 0.35);
+}
 """
 
 
@@ -77,8 +105,10 @@ class MonitorWindow(Gtk.Window):
 
         self._app = app
         self._backend = MonitorBackend()
+        self._brightness = BrightnessBackend()
         self._monitors: list[Monitor] = []
         self._profiles = ProfileManager()
+        self._debounce_ids: dict[str, int] = {}  # key -> GLib source id
 
         # Load CSS
         css_provider = Gtk.CssProvider()
@@ -298,6 +328,142 @@ class MonitorWindow(Gtk.Window):
             "notify::selected", self._on_transform_changed, index
         )
         grid.attach(transform_dropdown, 1, row, 1, 1)
+
+        # --- Brightness / Contrast section ---
+        self._build_brightness_controls(mon)
+
+    def _build_brightness_controls(self, mon: Monitor) -> None:
+        """Build brightness/contrast sliders for the given monitor."""
+        has_brightness = self._brightness.supports_brightness(mon.name)
+        has_contrast = self._brightness.supports_contrast(mon.name)
+
+        if not has_brightness and not has_contrast:
+            note = Gtk.Label(
+                label="☀ Brightness control not available for this display"
+            )
+            note.add_css_class("brightness-unsupported")
+            note.set_halign(Gtk.Align.START)
+            note.set_margin_top(8)
+            self._controls_box.append(note)
+            return
+
+        section = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=6
+        )
+        section.add_css_class("brightness-section")
+        self._controls_box.append(section)
+
+        section_title = Gtk.Label(label="☀ Brightness & Display")
+        section_title.add_css_class("section-title")
+        section_title.set_halign(Gtk.Align.START)
+        section.append(section_title)
+
+        if has_brightness:
+            brightness = self._brightness.get_brightness(mon.name)
+            section.append(
+                self._make_slider_row(
+                    "Brightness",
+                    brightness if brightness is not None else 50,
+                    mon.name,
+                    "brightness",
+                )
+            )
+
+        if has_contrast:
+            contrast = self._brightness.get_contrast(mon.name)
+            section.append(
+                self._make_slider_row(
+                    "Contrast",
+                    contrast if contrast is not None else 50,
+                    mon.name,
+                    "contrast",
+                )
+            )
+
+    def _make_slider_row(
+        self, label_text: str, value: int, monitor_name: str, prop: str
+    ) -> Gtk.Box:
+        """Create a labeled slider row with percentage display."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        label = Gtk.Label(label=label_text)
+        label.add_css_class("brightness-label")
+        label.set_halign(Gtk.Align.START)
+        row.append(label)
+
+        adjustment = Gtk.Adjustment(
+            value=value, lower=0, upper=100, step_increment=1, page_increment=5
+        )
+        scale = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adjustment
+        )
+        scale.set_draw_value(False)
+        scale.set_hexpand(True)
+        scale.add_css_class("brightness-slider")
+        row.append(scale)
+
+        pct_label = Gtk.Label(label=f"{value}%")
+        pct_label.add_css_class("brightness-value")
+        row.append(pct_label)
+
+        # Debounced change handler
+        is_ddc = not monitor_name.startswith("eDP")
+        debounce_ms = 300 if is_ddc else 50
+
+        scale.connect(
+            "value-changed",
+            self._on_brightness_slider_changed,
+            pct_label,
+            monitor_name,
+            prop,
+            debounce_ms,
+        )
+
+        return row
+
+    def _on_brightness_slider_changed(
+        self,
+        scale: Gtk.Scale,
+        pct_label: Gtk.Label,
+        monitor_name: str,
+        prop: str,
+        debounce_ms: int,
+    ) -> None:
+        """Handle slider value change with debounce."""
+        value = int(scale.get_value())
+        pct_label.set_text(f"{value}%")
+
+        # Cancel previous pending call for this monitor+prop
+        key = f"{monitor_name}:{prop}"
+        if key in self._debounce_ids:
+            GLib.source_remove(self._debounce_ids[key])
+
+        self._debounce_ids[key] = GLib.timeout_add(
+            debounce_ms,
+            self._apply_brightness_value,
+            monitor_name,
+            prop,
+            value,
+        )
+
+    def _apply_brightness_value(
+        self, monitor_name: str, prop: str, value: int
+    ) -> bool:
+        """Apply the brightness/contrast value (called after debounce)."""
+        key = f"{monitor_name}:{prop}"
+        self._debounce_ids.pop(key, None)
+
+        if prop == "brightness":
+            ok = self._brightness.set_brightness(monitor_name, value)
+        else:
+            ok = self._brightness.set_contrast(monitor_name, value)
+
+        if ok:
+            self._set_status(f"{prop.title()} → {value}%")
+        else:
+            self._set_status(f"✘ Failed to set {prop}")
+
+        return False  # Don't repeat
 
     # ------------------------------------------------------------------
     # Event handlers

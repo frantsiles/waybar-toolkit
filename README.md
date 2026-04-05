@@ -11,6 +11,10 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 - **Identify** — Flash a big number on each display (like Windows/KDE Plasma)
 - **Drag & drop reorder** — Grab a monitor and drag it to swap positions
 - **Swap positions** — Move monitors left/right with toolbar buttons
+- **Brightness control** — Adjust brightness per monitor in real time
+  - Laptop (eDP): via `brightnessctl` (backlight)
+  - External monitors: via `ddcutil` (DDC/CI) — see [Known Limitations](#known-limitations)
+- **Contrast control** — Adjust contrast on DDC/CI-capable external monitors
 - **Configure** — Change resolution, refresh rate, scale, and transform per monitor
 - **Apply** — Instantly apply changes via `hyprctl` or `wlr-randr`
 - **Profiles** — Save and load named monitor layouts (e.g. "docked", "gaming")
@@ -30,6 +34,9 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 - One of:
   - **Hyprland** (uses `hyprctl`)
   - **wlr-randr** (for Sway or other wlroots compositors)
+- Optional (for brightness/contrast):
+  - `brightnessctl` — laptop backlight control
+  - `ddcutil` — external monitor DDC/CI control
 
 ## Installation
 
@@ -101,6 +108,7 @@ waybar_toolkit/
 ├── main_window.py            # Utility hub window
 ├── monitors/
 │   ├── backend.py            # hyprctl/wlr-randr abstraction
+│   ├── brightness.py         # Brightness/contrast (brightnessctl + ddcutil)
 │   ├── monitor_canvas.py     # Visual monitor layout (Cairo)
 │   ├── monitor_window.py     # Monitor Manager window
 │   ├── identify.py           # Identify overlay per monitor
@@ -108,6 +116,21 @@ waybar_toolkit/
 └── utils/
     └── compositor.py         # Compositor detection
 ```
+
+## Known Limitations
+
+### NVIDIA + DDC/CI (external monitor brightness/contrast)
+
+On systems with **NVIDIA proprietary drivers**, `ddcutil` can **read** DDC/CI values (brightness, contrast) from external monitors but **cannot write** them. This is a known NVIDIA driver limitation that also affects Waybar's built-in backlight module — it only works on the laptop's primary display (eDP), not on external monitors.
+
+This means:
+- **Laptop display (eDP)**: Brightness slider works perfectly via `brightnessctl`
+- **External monitors (HDMI/DP)**: Brightness and contrast sliders are displayed and read the current values, but changes will not take effect on NVIDIA
+
+**Workaround options:**
+- Install `ddcci-driver-linux-dkms` (AUR) which creates kernel backlight devices for external monitors, bypassing the `ddcutil` write issue
+- Use the monitor's physical OSD buttons to adjust brightness/contrast
+- On AMD/Intel GPUs, `ddcutil` write should work without issues
 
 ## Built With AI Assistance
 
