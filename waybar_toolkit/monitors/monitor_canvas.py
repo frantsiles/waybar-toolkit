@@ -42,8 +42,15 @@ def _rgba(color: tuple, alpha: float | None = None) -> tuple[float, float, float
     return color
 
 
+# Minimum pixels to move before a click becomes a drag
+_DRAG_THRESHOLD = 6
+
+
 class MonitorCanvas(Gtk.DrawingArea):
-    """Draws a scaled representation of the monitor layout."""
+    """Draws a scaled representation of the monitor layout.
+
+    Supports click-to-select and drag-to-reorder monitors horizontally.
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -53,17 +60,30 @@ class MonitorCanvas(Gtk.DrawingArea):
         self._hover_index: int = -1
         self._rects: list[tuple[float, float, float, float]] = []  # drawn rects
         self._on_select_callback = None
+        self._on_swap_callback = None
+
+        # Drag state
+        self._dragging: bool = False
+        self._drag_index: int = -1
+        self._drag_start_x: float = 0.0
+        self._drag_offset_x: float = 0.0  # current drag displacement
+        self._press_x: float = 0.0
+        self._press_y: float = 0.0
+        self._press_index: int = -1  # monitor pressed, before drag threshold
 
         self.set_content_width(500)
         self.set_content_height(200)
         self.set_draw_func(self._draw)
         self.set_hexpand(True)
         self.set_vexpand(True)
+        self.set_cursor(Gdk.Cursor.new_from_name("default"))
 
-        # Click handling
-        click = Gtk.GestureClick.new()
-        click.connect("released", self._on_click)
-        self.add_controller(click)
+        # Press / release handling via GestureDrag (better for drag detection)
+        drag = Gtk.GestureDrag.new()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        self.add_controller(drag)
 
         # Hover handling
         motion = Gtk.EventControllerMotion.new()
@@ -89,6 +109,10 @@ class MonitorCanvas(Gtk.DrawingArea):
         """Register a callback(index) for when a monitor is clicked."""
         self._on_select_callback = callback
 
+    def connect_swap(self, callback) -> None:
+        """Register a callback(idx_a, idx_b) for when monitors are swapped via drag."""
+        self._on_swap_callback = callback
+
     def _hit_test(self, x: float, y: float) -> int:
         """Return index of monitor at (x, y) or -1."""
         for i, (rx, ry, rw, rh) in enumerate(self._rects):
@@ -96,23 +120,104 @@ class MonitorCanvas(Gtk.DrawingArea):
                 return i
         return -1
 
-    def _on_click(self, gesture, n_press, x, y):
-        idx = self._hit_test(x, y)
-        if idx >= 0:
-            self._selected_index = idx
+    # -- Drag-and-drop ------------------------------------------------
+
+    def _on_drag_begin(self, gesture, start_x, start_y):
+        """Mouse button pressed — record start position."""
+        self._press_x = start_x
+        self._press_y = start_y
+        self._press_index = self._hit_test(start_x, start_y)
+        self._dragging = False
+        self._drag_offset_x = 0.0
+
+    def _on_drag_update(self, gesture, offset_x, offset_y):
+        """Mouse moved while pressed — start drag if past threshold."""
+        if self._press_index < 0:
+            return
+
+        if not self._dragging and abs(offset_x) > _DRAG_THRESHOLD:
+            # Start dragging
+            self._dragging = True
+            self._drag_index = self._press_index
+            self._selected_index = self._press_index
+            self.set_cursor(Gdk.Cursor.new_from_name("grabbing"))
+
+        if self._dragging:
+            self._drag_offset_x = offset_x
             self.queue_draw()
-            if self._on_select_callback:
-                self._on_select_callback(idx)
+
+    def _on_drag_end(self, gesture, offset_x, offset_y):
+        """Mouse released — either select (click) or finish drag (swap)."""
+        if self._dragging and self._drag_index >= 0:
+            # Determine which monitor the dragged one crossed over
+            swap_target = self._find_swap_target()
+            if swap_target >= 0 and swap_target != self._drag_index:
+                if self._on_swap_callback:
+                    self._on_swap_callback(self._drag_index, swap_target)
+
+            self._dragging = False
+            self._drag_index = -1
+            self._drag_offset_x = 0.0
+            self.set_cursor(Gdk.Cursor.new_from_name("default"))
+            self.queue_draw()
+        else:
+            # It was a click, not a drag
+            idx = self._press_index
+            if idx >= 0:
+                self._selected_index = idx
+                self.queue_draw()
+                if self._on_select_callback:
+                    self._on_select_callback(idx)
+
+        self._press_index = -1
+
+    def _find_swap_target(self) -> int:
+        """Find which monitor the dragged one should swap with.
+
+        Returns the index of the target monitor, or -1 if no swap.
+        """
+        if self._drag_index < 0 or not self._rects:
+            return -1
+
+        # Center of the dragged monitor at its current visual position
+        rx, ry, rw, rh = self._rects[self._drag_index]
+        dragged_center_x = rx + rw / 2 + self._drag_offset_x
+
+        # Check if dragged center crossed into another monitor's area
+        for i, (ox, oy, ow, oh) in enumerate(self._rects):
+            if i == self._drag_index:
+                continue
+            # Swap if dragged center passes the other monitor's center
+            other_center = ox + ow / 2
+            if self._drag_offset_x > 0 and dragged_center_x > other_center:
+                # Dragged right, past a neighbor
+                if ox > rx:  # neighbor is to the right
+                    return i
+            elif self._drag_offset_x < 0 and dragged_center_x < other_center:
+                # Dragged left, past a neighbor
+                if ox < rx:  # neighbor is to the left
+                    return i
+        return -1
+
+    # -- Hover --------------------------------------------------------
 
     def _on_motion(self, controller, x, y):
+        if self._dragging:
+            return  # drag_update handles this
         idx = self._hit_test(x, y)
         if idx != self._hover_index:
             self._hover_index = idx
+            # Show grab cursor when hovering over a monitor
+            if idx >= 0:
+                self.set_cursor(Gdk.Cursor.new_from_name("grab"))
+            else:
+                self.set_cursor(Gdk.Cursor.new_from_name("default"))
             self.queue_draw()
 
     def _on_leave(self, controller):
         if self._hover_index >= 0:
             self._hover_index = -1
+            self.set_cursor(Gdk.Cursor.new_from_name("default"))
             self.queue_draw()
 
     def _draw(self, area, cr, width, height):
@@ -164,20 +269,43 @@ class MonitorCanvas(Gtk.DrawingArea):
 
         self._rects = []
 
+        # First pass: compute rects (needed for drag drop zone detection)
+        self._rects = []
         for i, mon in enumerate(self._monitors):
             rx = offset_x + mon.x * scale
             ry = offset_y + mon.y * scale
             rw = mon.scaled_width * scale
             rh = mon.scaled_height * scale
-
             self._rects.append((rx, ry, rw, rh))
 
-            # Monitor rectangle
+        # Draw non-dragged monitors first, then the dragged one on top
+        draw_order = list(range(len(self._monitors)))
+        if self._dragging and self._drag_index >= 0:
+            draw_order.remove(self._drag_index)
+            draw_order.append(self._drag_index)  # draw last = on top
+
+        for i in draw_order:
+            mon = self._monitors[i]
+            rx, ry, rw, rh = self._rects[i]
+
+            is_dragged = self._dragging and i == self._drag_index
             is_selected = i == self._selected_index
             is_hovered = i == self._hover_index
 
+            # Apply drag offset
+            if is_dragged:
+                rx += self._drag_offset_x
+
+            # Drop shadow for dragged monitor
+            if is_dragged:
+                cr.set_source_rgba(0, 0, 0, 0.25)
+                _rounded_rect(cr, rx + 4, ry + 4, rw, rh, 8)
+                cr.fill()
+
             # Fill
-            if is_selected:
+            if is_dragged:
+                cr.set_source_rgba(*_rgba(accent, 0.45))
+            elif is_selected:
                 cr.set_source_rgba(*_rgba(accent, 0.3))
             elif is_hovered:
                 cr.set_source_rgba(*_rgba(card, 0.9))
@@ -188,7 +316,10 @@ class MonitorCanvas(Gtk.DrawingArea):
             cr.fill()
 
             # Border
-            if is_selected:
+            if is_dragged:
+                cr.set_source_rgba(*accent)
+                cr.set_line_width(3.0)
+            elif is_selected:
                 cr.set_source_rgba(*accent)
                 cr.set_line_width(2.5)
             else:
@@ -235,6 +366,21 @@ class MonitorCanvas(Gtk.DrawingArea):
                 extents = cr.text_extents(model_text)
                 cr.move_to(rx + rw / 2 - extents.width / 2, ry + rh * 0.82)
                 cr.show_text(model_text)
+
+        # Draw drop indicator line during drag
+        if self._dragging and self._drag_index >= 0:
+            target = self._find_swap_target()
+            if target >= 0:
+                tx, ty, tw, th = self._rects[target]
+                if self._drag_offset_x > 0:
+                    line_x = tx + tw + 2  # right edge of target
+                else:
+                    line_x = tx - 2  # left edge of target
+                cr.set_source_rgba(*accent)
+                cr.set_line_width(3.0)
+                cr.move_to(line_x, ty)
+                cr.line_to(line_x, ty + th)
+                cr.stroke()
 
 
 def _rounded_rect(cr, x, y, w, h, r):

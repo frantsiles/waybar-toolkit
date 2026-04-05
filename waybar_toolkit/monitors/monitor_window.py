@@ -97,6 +97,7 @@ class MonitorWindow(Gtk.Window):
         self._canvas = MonitorCanvas()
         self._canvas.set_content_height(220)
         self._canvas.connect_select(self._on_monitor_selected)
+        self._canvas.connect_swap(self._on_drag_swap)
         main_box.append(self._canvas)
 
         # --- Toolbar: Identify + Swap ---
@@ -330,6 +331,21 @@ class MonitorWindow(Gtk.Window):
             return
         self._monitors[mon_index].transform = dropdown.get_selected()
         self._canvas.queue_draw()
+
+    def _on_drag_swap(self, idx_a: int, idx_b: int) -> None:
+        """Handle drag-and-drop swap from the canvas."""
+        self._monitors = self._backend.swap_positions(
+            self._monitors, idx_a, idx_b
+        )
+        self._canvas.set_monitors(self._monitors)
+        # Select the dragged monitor at its new position
+        self._canvas.set_selected(0)  # will be first in sorted order
+        for i, m in enumerate(self._monitors):
+            if i == idx_a or m == self._monitors[min(idx_a, len(self._monitors) - 1)]:
+                self._canvas.set_selected(i)
+                break
+        self._update_controls(self._canvas.get_selected())
+        self._set_status("Swapped — click Apply to confirm")
 
     def _on_identify(self, *_args) -> None:
         show_identify(self._app, self._monitors)

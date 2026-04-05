@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1] - 2026-04-05
+
+### Added
+- Drag-and-drop monitor reordering in visual layout
+  - Grab any monitor and drag it to swap with its neighbor
+  - Visual feedback: drag shadow, drop indicator line, grab cursor
+  - 6px drag threshold to distinguish clicks from drags
+
 ## [0.1.0] - 2026-04-05
 
 ### Added

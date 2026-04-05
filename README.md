@@ -9,7 +9,8 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 ### Monitor Manager
 - **Visual layout** — See your monitors as proportional rectangles with resolution, scale, and model info
 - **Identify** — Flash a big number on each display (like Windows/KDE Plasma)
-- **Swap positions** — Move monitors left/right with a click
+- **Drag & drop reorder** — Grab a monitor and drag it to swap positions
+- **Swap positions** — Move monitors left/right with toolbar buttons
 - **Configure** — Change resolution, refresh rate, scale, and transform per monitor
 - **Apply** — Instantly apply changes via `hyprctl` or `wlr-randr`
 - **Profiles** — Save and load named monitor layouts (e.g. "docked", "gaming")
