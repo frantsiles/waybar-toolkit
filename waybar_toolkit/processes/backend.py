@@ -11,6 +11,17 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+
+class ProcessBackendError(RuntimeError):
+    """Base error for process backend operations."""
+
+
+class ProcessSnapshotError(ProcessBackendError):
+    """Raised when process snapshot collection fails."""
+
+
+class SystemStatsError(ProcessBackendError):
+    """Raised when system stats collection fails."""
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -195,44 +206,53 @@ class ProcessBackend:
 
     def get_processes(self) -> list[ProcessInfo]:
         """Return a list of all running processes with CPU/MEM%."""
-        now = time.monotonic()
-        elapsed = now - self._prev_time if self._prev_time else 0.0
-        self._prev_time = now
+        try:
+            now = time.monotonic()
+            elapsed = now - self._prev_time if self._prev_time else 0.0
+            self._prev_time = now
 
-        mem_total = self._get_mem_total_kb()
+            mem_total = self._get_mem_total_kb()
 
-        procs: list[ProcessInfo] = []
-        for entry in PROC.iterdir():
-            if not entry.name.isdigit():
-                continue
-            pid = int(entry.name)
-            info = _read_proc_pid(pid)
-            if info is None:
-                continue
+            procs: list[ProcessInfo] = []
+            for entry in PROC.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                pid = int(entry.name)
+                info = _read_proc_pid(pid)
+                if info is None:
+                    continue
 
-            # CPU% delta
-            if elapsed > 0 and pid in self._prev_procs:
-                prev_u, prev_s = self._prev_procs[pid]
-                delta_jiffies = (info._utime - prev_u) + (info._stime - prev_s)
-                cpu_seconds = delta_jiffies / self._hz
-                info.cpu_percent = round((cpu_seconds / elapsed) * 100, 1)
-            else:
-                info.cpu_percent = 0.0
+                # CPU% delta
+                if elapsed > 0 and pid in self._prev_procs:
+                    prev_u, prev_s = self._prev_procs[pid]
+                    delta_jiffies = (info._utime - prev_u) + (
+                        info._stime - prev_s
+                    )
+                    cpu_seconds = delta_jiffies / self._hz
+                    info.cpu_percent = round((cpu_seconds / elapsed) * 100, 1)
+                else:
+                    info.cpu_percent = 0.0
 
-            # MEM%
-            if mem_total > 0:
-                info.mem_percent = round((info.mem_rss_kb / mem_total) * 100, 1)
+                # MEM%
+                if mem_total > 0:
+                    info.mem_percent = round(
+                        (info.mem_rss_kb / mem_total) * 100, 1
+                    )
 
-            self._prev_procs[pid] = (info._utime, info._stime)
-            procs.append(info)
+                self._prev_procs[pid] = (info._utime, info._stime)
+                procs.append(info)
 
-        # Clean stale PIDs from cache
-        live_pids = {p.pid for p in procs}
-        self._prev_procs = {
-            k: v for k, v in self._prev_procs.items() if k in live_pids
-        }
+            # Clean stale PIDs from cache
+            live_pids = {p.pid for p in procs}
+            self._prev_procs = {
+                k: v for k, v in self._prev_procs.items() if k in live_pids
+            }
 
-        return procs
+            return procs
+        except (OSError, ValueError) as exc:
+            raise ProcessSnapshotError(
+                "Failed to read process snapshot from /proc"
+            ) from exc
 
     # ------------------------------------------------------------------
     # System stats
@@ -240,72 +260,77 @@ class ProcessBackend:
 
     def get_system_stats(self) -> SystemStats:
         """Return system-wide CPU, memory, uptime, and load average."""
-        # --- CPU from /proc/stat ---
-        stat_text = _read_file(PROC / "stat")
-        cpu_total = 0.0
-        cpu_per_core: list[float] = []
+        try:
+            # --- CPU from /proc/stat ---
+            stat_text = _read_file(PROC / "stat")
+            cpu_total = 0.0
+            cpu_per_core: list[float] = []
 
-        if stat_text:
-            lines = stat_text.splitlines()
-            new_total: tuple[int, ...] = ()
-            new_cores: list[tuple[int, ...]] = []
+            if stat_text:
+                lines = stat_text.splitlines()
+                new_total: tuple[int, ...] = ()
+                new_cores: list[tuple[int, ...]] = []
 
-            for line in lines:
-                if line.startswith("cpu "):
-                    new_total = _parse_proc_stat_line(line)
-                elif line.startswith("cpu"):
-                    new_cores.append(_parse_proc_stat_line(line))
+                for line in lines:
+                    if line.startswith("cpu "):
+                        new_total = _parse_proc_stat_line(line)
+                    elif line.startswith("cpu"):
+                        new_cores.append(_parse_proc_stat_line(line))
 
-            cpu_total = self._calc_cpu_percent(
-                self._prev_total_jiffies, new_total
-            )
-            for i, core in enumerate(new_cores):
-                prev = (
-                    self._prev_cpu_jiffies[i]
-                    if i < len(self._prev_cpu_jiffies)
-                    else ()
+                cpu_total = self._calc_cpu_percent(
+                    self._prev_total_jiffies, new_total
                 )
-                cpu_per_core.append(self._calc_cpu_percent(prev, core))
+                for i, core in enumerate(new_cores):
+                    prev = (
+                        self._prev_cpu_jiffies[i]
+                        if i < len(self._prev_cpu_jiffies)
+                        else ()
+                    )
+                    cpu_per_core.append(self._calc_cpu_percent(prev, core))
 
-            self._prev_total_jiffies = new_total
-            self._prev_cpu_jiffies = new_cores
+                self._prev_total_jiffies = new_total
+                self._prev_cpu_jiffies = new_cores
 
-        # --- Memory from /proc/meminfo ---
-        mem_total, mem_available, mem_cached = 0, 0, 0
-        meminfo = _read_file(PROC / "meminfo")
-        if meminfo:
-            for line in meminfo.splitlines():
-                if line.startswith("MemTotal:"):
-                    mem_total = int(line.split()[1])
-                elif line.startswith("MemAvailable:"):
-                    mem_available = int(line.split()[1])
-                elif line.startswith("Cached:"):
-                    mem_cached = int(line.split()[1])
-        mem_used = mem_total - mem_available
+            # --- Memory from /proc/meminfo ---
+            mem_total, mem_available, mem_cached = 0, 0, 0
+            meminfo = _read_file(PROC / "meminfo")
+            if meminfo:
+                for line in meminfo.splitlines():
+                    if line.startswith("MemTotal:"):
+                        mem_total = int(line.split()[1])
+                    elif line.startswith("MemAvailable:"):
+                        mem_available = int(line.split()[1])
+                    elif line.startswith("Cached:"):
+                        mem_cached = int(line.split()[1])
+            mem_used = mem_total - mem_available
 
-        # --- Uptime from /proc/uptime ---
-        uptime = 0.0
-        uptime_text = _read_file(PROC / "uptime")
-        if uptime_text:
-            uptime = float(uptime_text.split()[0])
+            # --- Uptime from /proc/uptime ---
+            uptime = 0.0
+            uptime_text = _read_file(PROC / "uptime")
+            if uptime_text:
+                uptime = float(uptime_text.split()[0])
 
-        # --- Load average ---
-        load_avg = os.getloadavg()
+            # --- Load average ---
+            load_avg = os.getloadavg()
 
-        # --- Process count ---
-        proc_count = sum(1 for e in PROC.iterdir() if e.name.isdigit())
+            # --- Process count ---
+            proc_count = sum(1 for e in PROC.iterdir() if e.name.isdigit())
 
-        return SystemStats(
-            cpu_percent_total=cpu_total,
-            cpu_percent_per_core=cpu_per_core,
-            mem_total_kb=mem_total,
-            mem_used_kb=mem_used,
-            mem_available_kb=mem_available,
-            mem_cached_kb=mem_cached,
-            uptime_seconds=uptime,
-            load_avg=(load_avg[0], load_avg[1], load_avg[2]),
-            process_count=proc_count,
-        )
+            return SystemStats(
+                cpu_percent_total=cpu_total,
+                cpu_percent_per_core=cpu_per_core,
+                mem_total_kb=mem_total,
+                mem_used_kb=mem_used,
+                mem_available_kb=mem_available,
+                mem_cached_kb=mem_cached,
+                uptime_seconds=uptime,
+                load_avg=(load_avg[0], load_avg[1], load_avg[2]),
+                process_count=proc_count,
+            )
+        except (OSError, ValueError) as exc:
+            raise SystemStatsError(
+                "Failed to read system statistics from /proc"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Signals

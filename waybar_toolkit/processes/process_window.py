@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -9,16 +10,18 @@ from gi.repository import Gtk, GLib, GObject, Gio, Pango  # noqa: E402
 
 from waybar_toolkit.processes.backend import (
     ProcessBackend,
+    ProcessBackendError,
     ProcessInfo,
+    ProcessSnapshotError,
     SIGNALS,
+    SystemStatsError,
 )
 from waybar_toolkit.processes.charts import CpuChart, MemChart
 from waybar_toolkit.processes.tree import (
+    UserGroup,
     build_process_tree,
     flatten_tree,
     group_by_user,
-    FlatRow,
-    UserGroup,
 )
 
 
@@ -146,6 +149,7 @@ SORT_STATE = "State"
 
 # Refresh interval (ms)
 REFRESH_MS = 2000
+logger = logging.getLogger(__name__)
 
 class ProcessListItem(GObject.Object):
     """Typed item for the process list model."""
@@ -394,7 +398,7 @@ class ProcessWindow(Gtk.Window):
 
             # Update status
             uptime = self._backend.format_uptime(stats.uptime_seconds)
-            load = ", ".join(f"{l:.2f}" for l in stats.load_avg)
+            load = ", ".join(f"{avg:.2f}" for avg in stats.load_avg)
             self._set_status(
                 f"{stats.process_count} processes | "
                 f"CPU {stats.cpu_percent_total:.1f}% | "
@@ -402,8 +406,14 @@ class ProcessWindow(Gtk.Window):
                 f"{stats.mem_total_kb // 1024}MB | "
                 f"Load: {load} | Up: {uptime}"
             )
-        except Exception as e:
-            self._set_status(f"Error: {e}")
+        except (ProcessSnapshotError, SystemStatsError) as exc:
+            self._set_status(f"Error refreshing process data: {exc}")
+        except ProcessBackendError:
+            logger.exception("Process backend error while refreshing data")
+            self._set_status("Error refreshing process data")
+        except Exception:
+            logger.exception("Unexpected error while refreshing process data")
+            self._set_status("Unexpected error refreshing process data")
 
     # ------------------------------------------------------------------
     # List building
