@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0] - 2026-04-05
+
+### Added
+- Brightness control per monitor
+  - Laptop displays (eDP): via `brightnessctl` backlight
+  - External monitors: via `ddcutil` DDC/CI
+  - Real-time slider with debounced apply (50ms backlight, 300ms DDC)
+- Contrast control for DDC/CI-capable external monitors
+- New `brightness.py` backend with auto-detection of backlight and DDC devices
+- Visual section "☀ Brightness & Display" in monitor controls panel
+- Graceful fallback: shows "not available" for unsupported displays
+
 ## [0.1.1] - 2026-04-05
 
 ### Added

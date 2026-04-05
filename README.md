@@ -11,6 +11,10 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 - **Identify** — Flash a big number on each display (like Windows/KDE Plasma)
 - **Drag & drop reorder** — Grab a monitor and drag it to swap positions
 - **Swap positions** — Move monitors left/right with toolbar buttons
+- **Brightness control** — Adjust brightness per monitor in real time
+  - Laptop (eDP): via `brightnessctl` (backlight)
+  - External monitors: via `ddcutil` (DDC/CI)
+- **Contrast control** — Adjust contrast on DDC/CI-capable external monitors
 - **Configure** — Change resolution, refresh rate, scale, and transform per monitor
 - **Apply** — Instantly apply changes via `hyprctl` or `wlr-randr`
 - **Profiles** — Save and load named monitor layouts (e.g. "docked", "gaming")
@@ -30,6 +34,9 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 - One of:
   - **Hyprland** (uses `hyprctl`)
   - **wlr-randr** (for Sway or other wlroots compositors)
+- Optional (for brightness/contrast):
+  - `brightnessctl` — laptop backlight control
+  - `ddcutil` — external monitor DDC/CI control
 
 ## Installation
 
@@ -101,6 +108,7 @@ waybar_toolkit/
 ├── main_window.py            # Utility hub window
 ├── monitors/
 │   ├── backend.py            # hyprctl/wlr-randr abstraction
+│   ├── brightness.py         # Brightness/contrast (brightnessctl + ddcutil)
 │   ├── monitor_canvas.py     # Visual monitor layout (Cairo)
 │   ├── monitor_window.py     # Monitor Manager window
 │   ├── identify.py           # Identify overlay per monitor
