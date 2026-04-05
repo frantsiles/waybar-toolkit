@@ -8,21 +8,38 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 from waybar_toolkit.monitors.backend import Monitor  # noqa: E402
 
-# Colors (RGBA)
-COLOR_BG = (0.12, 0.12, 0.14, 1.0)
-COLOR_MONITOR = (0.22, 0.24, 0.28, 1.0)
-COLOR_MONITOR_HOVER = (0.28, 0.30, 0.35, 1.0)
-COLOR_SELECTED = (0.35, 0.55, 0.95, 1.0)
-COLOR_BORDER = (0.4, 0.42, 0.48, 1.0)
-COLOR_TEXT = (0.9, 0.9, 0.92, 1.0)
-COLOR_SUBTEXT = (0.6, 0.62, 0.66, 1.0)
-
 CANVAS_PADDING = 40
 MIN_RECT_WIDTH = 120
+
+# Fallback colors (used when theme colors are unavailable)
+_FALLBACKS = {
+    "window_bg_color": (0.12, 0.12, 0.14, 1.0),
+    "window_fg_color": (0.9, 0.9, 0.92, 1.0),
+    "accent_bg_color": (0.35, 0.55, 0.95, 1.0),
+    "card_bg_color": (0.22, 0.24, 0.28, 1.0),
+    "borders": (0.4, 0.42, 0.48, 1.0),
+    "shade_color": (0.0, 0.0, 0.0, 0.36),
+}
+
+
+def _lookup_color(widget: Gtk.Widget, name: str) -> tuple[float, float, float, float]:
+    """Look up a named color from the GTK theme, with fallback."""
+    ctx = widget.get_style_context()
+    found, color = ctx.lookup_color(name)
+    if found:
+        return (color.red, color.green, color.blue, color.alpha)
+    return _FALLBACKS.get(name, (0.5, 0.5, 0.5, 1.0))
+
+
+def _rgba(color: tuple, alpha: float | None = None) -> tuple[float, float, float, float]:
+    """Return (r, g, b, a) — optionally override alpha."""
+    if alpha is not None:
+        return (color[0], color[1], color[2], alpha)
+    return color
 
 
 class MonitorCanvas(Gtk.DrawingArea):
@@ -100,13 +117,21 @@ class MonitorCanvas(Gtk.DrawingArea):
 
     def _draw(self, area, cr, width, height):
         """Cairo draw function."""
+        # Read theme colors
+        bg = _lookup_color(self, "window_bg_color")
+        fg = _lookup_color(self, "window_fg_color")
+        accent = _lookup_color(self, "accent_bg_color")
+        card = _lookup_color(self, "card_bg_color")
+        border = _lookup_color(self, "borders")
+        dim_fg = _rgba(fg, 0.55)
+
         # Background
-        cr.set_source_rgba(*COLOR_BG)
+        cr.set_source_rgba(*bg)
         cr.rectangle(0, 0, width, height)
         cr.fill()
 
         if not self._monitors:
-            cr.set_source_rgba(*COLOR_TEXT)
+            cr.set_source_rgba(*fg)
             cr.select_font_face("sans-serif")
             cr.set_font_size(14)
             cr.move_to(width / 2 - 60, height / 2)
@@ -153,28 +178,28 @@ class MonitorCanvas(Gtk.DrawingArea):
 
             # Fill
             if is_selected:
-                cr.set_source_rgba(*COLOR_SELECTED, 0.3)
+                cr.set_source_rgba(*_rgba(accent, 0.3))
             elif is_hovered:
-                cr.set_source_rgba(*COLOR_MONITOR_HOVER)
+                cr.set_source_rgba(*_rgba(card, 0.9))
             else:
-                cr.set_source_rgba(*COLOR_MONITOR)
+                cr.set_source_rgba(*card)
 
             _rounded_rect(cr, rx, ry, rw, rh, 8)
             cr.fill()
 
             # Border
             if is_selected:
-                cr.set_source_rgba(*COLOR_SELECTED)
+                cr.set_source_rgba(*accent)
                 cr.set_line_width(2.5)
             else:
-                cr.set_source_rgba(*COLOR_BORDER)
+                cr.set_source_rgba(*border)
                 cr.set_line_width(1.0)
 
             _rounded_rect(cr, rx, ry, rw, rh, 8)
             cr.stroke()
 
             # Monitor number (big)
-            cr.set_source_rgba(*COLOR_TEXT)
+            cr.set_source_rgba(*fg)
             cr.select_font_face("sans-serif")
             cr.set_font_size(min(28, rh * 0.3))
             num_text = str(i + 1)
@@ -187,7 +212,7 @@ class MonitorCanvas(Gtk.DrawingArea):
 
             # Monitor name
             cr.set_font_size(min(11, rh * 0.1))
-            cr.set_source_rgba(*COLOR_SUBTEXT)
+            cr.set_source_rgba(*dim_fg)
             name_text = mon.name
             extents = cr.text_extents(name_text)
             cr.move_to(rx + rw / 2 - extents.width / 2, ry + rh * 0.55)
@@ -206,6 +231,7 @@ class MonitorCanvas(Gtk.DrawingArea):
             if mon.model:
                 model_text = mon.model
                 cr.set_font_size(min(9, rh * 0.08))
+                cr.set_source_rgba(*dim_fg)
                 extents = cr.text_extents(model_text)
                 cr.move_to(rx + rw / 2 - extents.width / 2, ry + rh * 0.82)
                 cr.show_text(model_text)

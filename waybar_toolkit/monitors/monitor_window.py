@@ -15,20 +15,21 @@ from waybar_toolkit.monitors.profiles import ProfileManager
 
 CSS = """
 .monitor-window {
-    background-color: #1e1e22;
+    background-color: @window_bg_color;
+    color: @window_fg_color;
 }
 .section-title {
     font-size: 13px;
     font-weight: bold;
-    color: #b0b0b8;
+    color: @window_fg_color;
 }
 .info-label {
     font-size: 12px;
-    color: #808088;
+    color: alpha(@window_fg_color, 0.55);
 }
 .info-value {
     font-size: 12px;
-    color: #e0e0e4;
+    color: @window_fg_color;
 }
 .action-button {
     padding: 6px 16px;
@@ -36,32 +37,32 @@ CSS = """
     font-size: 12px;
 }
 .apply-button {
-    background-color: #4a8fe7;
-    color: white;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 .apply-button:hover {
-    background-color: #5a9ff7;
+    background-color: lighter(@accent_bg_color);
 }
 .identify-button {
-    background-color: #3a3a42;
-    color: #e0e0e4;
+    background-color: @card_bg_color;
+    color: @window_fg_color;
 }
 .identify-button:hover {
-    background-color: #4a4a52;
+    background-color: lighter(@card_bg_color);
 }
 .swap-button {
-    background-color: #3a3a42;
-    color: #e0e0e4;
+    background-color: @card_bg_color;
+    color: @window_fg_color;
     min-width: 36px;
 }
 .swap-button:hover {
-    background-color: #4a4a52;
+    background-color: lighter(@card_bg_color);
 }
 .status-bar {
-    background-color: #16161a;
+    background-color: @headerbar_bg_color;
     padding: 4px 12px;
     font-size: 11px;
-    color: #808088;
+    color: alpha(@window_fg_color, 0.55);
 }
 """
 

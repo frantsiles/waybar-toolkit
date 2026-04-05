@@ -11,6 +11,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
 from waybar_toolkit.monitors.backend import Monitor  # noqa: E402
+from waybar_toolkit.monitors.monitor_canvas import _lookup_color, _rgba  # noqa: E402
 
 DISPLAY_SECONDS = 3
 
@@ -49,13 +50,19 @@ class IdentifyOverlay(Gtk.Window):
         return GLib.SOURCE_REMOVE
 
     def _draw(self, area, cr, width, height):
-        # Dark semi-transparent background
-        cr.set_source_rgba(0.05, 0.05, 0.08, 0.85)
+        # Read theme colors
+        bg = _lookup_color(area, "window_bg_color")
+        fg = _lookup_color(area, "window_fg_color")
+        accent = _lookup_color(area, "accent_bg_color")
+        dim_fg = _rgba(fg, 0.55)
+
+        # Semi-transparent background from theme
+        cr.set_source_rgba(*_rgba(bg, 0.85))
         cr.rectangle(0, 0, width, height)
         cr.fill()
 
-        # Big number
-        cr.set_source_rgba(0.35, 0.55, 0.95, 1.0)
+        # Big number — accent color
+        cr.set_source_rgba(*accent)
         cr.select_font_face("sans-serif")
         number_size = min(width, height) * 0.35
         cr.set_font_size(number_size)
@@ -68,7 +75,7 @@ class IdentifyOverlay(Gtk.Window):
         cr.show_text(num_text)
 
         # Monitor name
-        cr.set_source_rgba(0.9, 0.9, 0.92, 1.0)
+        cr.set_source_rgba(*fg)
         cr.set_font_size(min(28, height * 0.05))
         name_text = self._monitor.name
         extents = cr.text_extents(name_text)
@@ -76,7 +83,7 @@ class IdentifyOverlay(Gtk.Window):
         cr.show_text(name_text)
 
         # Model
-        cr.set_source_rgba(0.6, 0.62, 0.66, 1.0)
+        cr.set_source_rgba(*dim_fg)
         cr.set_font_size(min(20, height * 0.035))
         model_text = self._monitor.display_name
         extents = cr.text_extents(model_text)
@@ -93,28 +100,54 @@ class IdentifyOverlay(Gtk.Window):
         cr.show_text(info)
 
 
+def _hyprctl(*args: str) -> None:
+    """Run a hyprctl command, ignoring errors."""
+    try:
+        subprocess.run(
+            ["hyprctl", *args],
+            capture_output=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
 def show_identify(app: Gtk.Application, monitors: list[Monitor]) -> None:
     """Show identify overlays on all monitors.
 
-    Uses hyprctl to move each window to the correct monitor and fullscreen it.
+    Sequentially focuses each monitor, creates the overlay window on it,
+    then fullscreens it — ensuring each overlay lands on the right display.
     """
-    for i, mon in enumerate(monitors):
-        overlay = IdentifyOverlay(app, mon, i)
+    _show_overlay_on_monitor(app, monitors, 0)
+
+
+def _show_overlay_on_monitor(
+    app: Gtk.Application, monitors: list[Monitor], index: int
+) -> None:
+    """Recursively show an overlay on each monitor with timing delays."""
+    if index >= len(monitors):
+        return
+
+    mon = monitors[index]
+
+    # 1. Focus the target monitor
+    _hyprctl("dispatch", "focusmonitor", mon.name)
+
+    # 2. After a short delay, create the window (opens on focused monitor)
+    def _create_window() -> bool:
+        overlay = IdentifyOverlay(app, mon, index)
         overlay.present()
 
-        # Use hyprctl to move the window to the right monitor and fullscreen
-        try:
-            # Move to monitor and make fullscreen
-            subprocess.Popen(
-                [
-                    "hyprctl",
-                    "--batch",
-                    f"dispatch focusmonitor {mon.name};"
-                    f"dispatch movetoworkspace name:identify_{mon.name};"
-                    f"dispatch fullscreen 0",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError:
-            pass  # hyprctl not available, window will just open normally
+        # 3. After another delay, fullscreen and move to next monitor
+        def _fullscreen_and_next() -> bool:
+            _hyprctl("dispatch", "fullscreen", "0")
+            # Proceed to the next monitor
+            GLib.timeout_add(150, lambda: _show_overlay_on_monitor(
+                app, monitors, index + 1
+            ) or GLib.SOURCE_REMOVE)
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add(150, _fullscreen_and_next)
+        return GLib.SOURCE_REMOVE
+
+    GLib.timeout_add(150, _create_window)

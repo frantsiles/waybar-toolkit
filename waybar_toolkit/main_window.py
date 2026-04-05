@@ -12,28 +12,29 @@ from waybar_toolkit.monitors.monitor_window import MonitorWindow
 
 CSS_HUB = """
 .hub-window {
-    background-color: #1a1a1e;
+    background-color: @window_bg_color;
+    color: @window_fg_color;
 }
 .hub-title {
     font-size: 18px;
     font-weight: bold;
-    color: #e0e0e4;
+    color: @window_fg_color;
     margin-bottom: 8px;
 }
 .hub-subtitle {
     font-size: 12px;
-    color: #808088;
+    color: alpha(@window_fg_color, 0.55);
     margin-bottom: 16px;
 }
 .utility-button {
     padding: 16px 24px;
     border-radius: 12px;
-    background-color: #2a2a32;
+    background-color: @card_bg_color;
     min-width: 140px;
     min-height: 100px;
 }
 .utility-button:hover {
-    background-color: #3a3a42;
+    background-color: lighter(@card_bg_color);
 }
 .utility-icon {
     font-size: 32px;
@@ -41,11 +42,11 @@ CSS_HUB = """
 }
 .utility-label {
     font-size: 13px;
-    color: #e0e0e4;
+    color: @window_fg_color;
 }
 .utility-desc {
     font-size: 10px;
-    color: #808088;
+    color: alpha(@window_fg_color, 0.55);
 }
 """
 

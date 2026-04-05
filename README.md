@@ -108,6 +108,12 @@ waybar_toolkit/
     └── compositor.py         # Compositor detection
 ```
 
+## Built With AI Assistance
+
+This project was built with the help of **Oz (Warp AI)** as a development assistant. The architecture, code, and implementation were produced collaboratively — the author provided the vision, requirements, and testing, while the AI assisted with Python/GTK4 code generation.
+
+Transparency matters. This is open source because the goal is to help the Wayland/Hyprland community, not to take credit for work that isn't entirely manual.
+
 ## Contributing
 
 Contributions are welcome! Feel free to open issues or PRs.

@@ -142,17 +142,25 @@ def get_monitors_hyprland() -> list[Monitor]:
     return _parse_hyprland_monitors(data)
 
 
-def apply_monitor_hyprland(mon: Monitor) -> None:
-    """Apply monitor configuration via hyprctl keyword."""
-    # hyprctl keyword monitor <name>,<WxH>@<Hz>,<X>x<Y>,<scale>,transform,<T>
+def _hyprctl_monitor_arg(mon: Monitor) -> str:
+    """Build the monitor config string for hyprctl."""
     mode = f"{mon.width}x{mon.height}@{mon.refresh_rate:.0f}"
     pos = f"{mon.x}x{mon.y}"
-    cmd = [
-        "hyprctl",
-        "keyword",
-        "monitor",
-        f"{mon.name},{mode},{pos},{mon.scale},transform,{mon.transform}",
+    return f"{mon.name},{mode},{pos},{mon.scale},transform,{mon.transform}"
+
+
+def apply_monitor_hyprland(mon: Monitor) -> None:
+    """Apply monitor configuration via hyprctl keyword."""
+    cmd = ["hyprctl", "keyword", "monitor", _hyprctl_monitor_arg(mon)]
+    _run(cmd)
+
+
+def apply_all_hyprland(monitors: list[Monitor]) -> None:
+    """Apply all monitor configs atomically via hyprctl --batch."""
+    batch_cmds = [
+        f"keyword monitor {_hyprctl_monitor_arg(mon)}" for mon in monitors
     ]
+    cmd = ["hyprctl", "--batch", ";".join(batch_cmds)]
     _run(cmd)
 
 
@@ -331,9 +339,12 @@ class MonitorBackend:
             raise RuntimeError("No supported backend to apply monitor config.")
 
     def apply_all(self, monitors: list[Monitor]) -> None:
-        """Apply configuration for all monitors."""
-        for mon in monitors:
-            self.apply(mon)
+        """Apply configuration for all monitors atomically."""
+        if self.compositor == Compositor.HYPRLAND and has_command("hyprctl"):
+            apply_all_hyprland(monitors)
+        else:
+            for mon in monitors:
+                self.apply(mon)
 
     def swap_positions(
         self, monitors: list[Monitor], idx_a: int, idx_b: int
