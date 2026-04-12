@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
+from typing import List
+from .gpu_backend import GPUBackend # Import the new GPU backend
 
 from waybar_toolkit.utils.compositor import Compositor, detect_compositor, has_command
 
@@ -356,7 +358,7 @@ class MonitorBackend:
     """Unified monitor backend that auto-selects the right tool."""
 
     def __init__(self) -> None:
-        self.compositor = detect_compositor()
+        self.gpu_backend = GPUBackend() # Initialize the GPU backend
 
     def get_monitors(self) -> list[Monitor]:
         """Get list of connected monitors."""
@@ -368,6 +370,10 @@ class MonitorBackend:
             "No supported monitor backend found. "
             "Install hyprctl (Hyprland) or wlr-randr."
         )
+
+    def get_gpu_info(self) -> dict:
+        """Retrieves comprehensive GPU information."""
+        return self.gpu_backend.get_gpu_info()
 
     def apply(self, monitor: Monitor) -> None:
         """Apply configuration for a single monitor."""

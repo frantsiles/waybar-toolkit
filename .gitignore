@@ -10,3 +10,4 @@ build/
 env/
 .mypy_cache/
 .ruff_cache/
+.aider*

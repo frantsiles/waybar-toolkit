@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import gi
 import sys
 
-import gi
-
-gi.require_version("Gtk", "4.0")
+gi.require_version("Gtk", "4")
 from gi.repository import Gtk, Gio, GLib  # noqa: E402
 
 from waybar_toolkit.main_window import MainWindow
 from waybar_toolkit.monitors.monitor_window import MonitorWindow
 from waybar_toolkit.processes.process_window import ProcessWindow
+from waybar_toolkit.monitors.backend import MonitorBackend
+from waybar_toolkit.monitors.gpu_backend import GPUBackend
 
 
 APP_ID = "dev.waybar-toolkit"
@@ -27,6 +28,8 @@ class WaybarToolkitApp(Gtk.Application):
         )
         self._direct_monitor = False
         self._direct_processes = False
+        self.monitor_backend = MonitorBackend()
+        self.gpu_backend = GPUBackend()
 
         # CLI options
         self.add_main_option(
