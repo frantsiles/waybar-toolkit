@@ -21,6 +21,7 @@ from waybar_toolkit.waybar.structured import (
     LAYOUT_NUMERIC_KEYS,
     LAYOUT_TEXT_KEYS,
     build_layout_payload,
+    build_module_catalog,
     extract_module_buckets,
 )
 
@@ -102,6 +103,14 @@ CSS = """
     padding: 4px 8px;
     color: @window_fg_color;
 }
+.module-trash-zone {
+    background-color: alpha(#c0392b, 0.15);
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+.module-trash-zone:hover {
+    background-color: alpha(#c0392b, 0.25);
+}
 .mini-button {
     min-width: 24px;
     padding: 2px 6px;
@@ -128,6 +137,7 @@ class WaybarConfigWindow(Gtk.Window):
         }
         self._module_boxes: dict[str, Gtk.Box] = {}
         self._module_new_entry: Gtk.Entry | None = None
+        self._module_catalog_dropdown: Gtk.DropDown | None = None
         self._module_target_dropdown: Gtk.DropDown | None = None
         self._drag_source_align: str | None = None
         self._drag_source_index: int = -1
@@ -349,13 +359,36 @@ class WaybarConfigWindow(Gtk.Window):
         modules_hint.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         modules_box.append(modules_hint)
 
+        trash_zone = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        trash_zone.add_css_class("module-trash-zone")
+        trash_zone.set_halign(Gtk.Align.FILL)
+        trash_zone.set_hexpand(True)
+        trash_label = Gtk.Label(label="🗑 Drop here to remove module")
+        trash_label.add_css_class("section-title")
+        trash_label.set_halign(Gtk.Align.CENTER)
+        trash_label.set_hexpand(True)
+        trash_zone.append(trash_label)
+        trash_target = Gtk.DropTarget.new(
+            GObject.TYPE_STRING,
+            Gdk.DragAction.MOVE,
+        )
+        trash_target.connect("drop", self._on_module_drop_on_trash)
+        trash_zone.add_controller(trash_target)
+        modules_box.append(trash_zone)
+
         add_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         modules_box.append(add_row)
+
+        self._module_catalog_dropdown = Gtk.DropDown.new_from_strings(
+            ["(existing module)"]
+        )
+        self._module_catalog_dropdown.set_hexpand(True)
+        add_row.append(self._module_catalog_dropdown)
 
         self._module_new_entry = Gtk.Entry()
         self._module_new_entry.set_hexpand(True)
         self._module_new_entry.set_placeholder_text(
-            "Module name (e.g. clock, custom/stats)"
+            "or custom module (e.g. custom/stats)"
         )
         self._module_new_entry.connect("activate", self._on_add_module)
         add_row.append(self._module_new_entry)
@@ -470,6 +503,7 @@ class WaybarConfigWindow(Gtk.Window):
                     )
 
         self._module_buckets = extract_module_buckets(data)
+        self._refresh_module_catalog(data)
         self._render_module_columns()
 
     def _clear_structured_editor(self) -> None:
@@ -479,6 +513,7 @@ class WaybarConfigWindow(Gtk.Window):
             elif isinstance(widget, Gtk.DropDown):
                 widget.set_selected(0)
         self._module_buckets = {key: [] for key in ALIGN_KEYS}
+        self._refresh_module_catalog({})
         self._render_module_columns()
 
     def _collect_layout_values(self) -> dict[str, Any]:
@@ -528,11 +563,19 @@ class WaybarConfigWindow(Gtk.Window):
             self._set_status(str(exc))
 
     def _on_add_module(self, *_args) -> None:
-        if not self._module_new_entry or not self._module_target_dropdown:
+        if (
+            not self._module_new_entry
+            or not self._module_target_dropdown
+            or not self._module_catalog_dropdown
+        ):
             return
         name = self._module_new_entry.get_text().strip()
         if not name:
-            self._set_status("Write a module name first")
+            name = self._get_dropdown_value(self._module_catalog_dropdown).strip()
+        if name.startswith("(") and name.endswith(")"):
+            name = ""
+        if not name:
+            self._set_status("Select or type a module name first")
             return
         selected = self._module_target_dropdown.get_selected()
         align = (
@@ -542,7 +585,17 @@ class WaybarConfigWindow(Gtk.Window):
         )
         self._module_buckets[align].append(name)
         self._module_new_entry.set_text("")
+        self._module_catalog_dropdown.set_selected(0)
         self._render_module_columns()
+        self._set_status(f"Added module '{name}' to {align}")
+
+    def _refresh_module_catalog(self, data: dict[str, Any]) -> None:
+        if not self._module_catalog_dropdown:
+            return
+        catalog = build_module_catalog(data)
+        options = ["(existing module)"] + catalog
+        self._module_catalog_dropdown.set_model(Gtk.StringList.new(options))
+        self._module_catalog_dropdown.set_selected(0)
 
     def _render_module_columns(self) -> None:
         for align in ALIGN_KEYS:
@@ -595,16 +648,6 @@ class WaybarConfigWindow(Gtk.Window):
                 )
                 row.add_controller(drop_target)
 
-                remove_btn = Gtk.Button(label="✕")
-                remove_btn.add_css_class("mini-button")
-                remove_btn.connect(
-                    "clicked",
-                    lambda *_,
-                    a=align,
-                    i=idx: self._remove_module(a, i),
-                )
-                row.append(remove_btn)
-
                 box.append(row)
 
     def _on_module_drag_prepare(
@@ -642,6 +685,27 @@ class WaybarConfigWindow(Gtk.Window):
     ) -> bool:
         return self._apply_drag_move(target_align, None)
 
+    def _on_module_drop_on_trash(
+        self,
+        _target: Gtk.DropTarget,
+        _value: str,
+        _x: float,
+        _y: float,
+    ) -> bool:
+        source_align = self._drag_source_align
+        source_index = self._drag_source_index
+        if source_align is None or source_index < 0:
+            return False
+        source_items = self._module_buckets.get(source_align, [])
+        if not (0 <= source_index < len(source_items)):
+            return False
+        removed = source_items.pop(source_index)
+        self._drag_source_align = None
+        self._drag_source_index = -1
+        self._render_module_columns()
+        self._set_status(f"Removed module '{removed}'")
+        return True
+
     def _apply_drag_move(
         self,
         target_align: str,
@@ -673,13 +737,6 @@ class WaybarConfigWindow(Gtk.Window):
         self._drag_source_index = -1
         self._render_module_columns()
         return True
-
-    def _remove_module(self, align: str, index: int) -> None:
-        modules = self._module_buckets.get(align, [])
-        if not (0 <= index < len(modules)):
-            return
-        modules.pop(index)
-        self._render_module_columns()
 
     @staticmethod
     def _set_dropdown_value(dropdown: Gtk.DropDown, value: str) -> None:

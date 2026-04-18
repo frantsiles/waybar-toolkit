@@ -7,6 +7,26 @@ from collections.abc import Mapping
 from typing import Any
 
 ALIGN_KEYS = ("modules-left", "modules-center", "modules-right")
+KNOWN_WAYBAR_MODULES = (
+    "workspaces",
+    "window",
+    "clock",
+    "cpu",
+    "memory",
+    "temperature",
+    "disk",
+    "network",
+    "pulseaudio",
+    "wireplumber",
+    "battery",
+    "backlight",
+    "bluetooth",
+    "tray",
+    "idle_inhibitor",
+    "power-profiles-daemon",
+    "keyboard-state",
+    "language",
+)
 
 LAYOUT_NUMERIC_KEYS = {
     "height",
@@ -157,3 +177,31 @@ def extract_module_buckets(data: Mapping[str, Any]) -> dict[str, list[str]]:
             if stripped:
                 buckets[key] = [stripped]
     return buckets
+
+
+def build_module_catalog(data: Mapping[str, Any]) -> list[str]:
+    """Build module catalog from known modules plus those already present."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(name: str) -> None:
+        module = name.strip()
+        if module and module not in seen:
+            seen.add(module)
+            out.append(module)
+
+    for name in KNOWN_WAYBAR_MODULES:
+        add(name)
+
+    buckets = extract_module_buckets(data)
+    for key in ALIGN_KEYS:
+        for name in buckets.get(key, []):
+            add(name)
+
+    for key in data.keys():
+        if key in ALIGN_KEYS:
+            continue
+        if "/" in key:
+            add(str(key))
+
+    return out

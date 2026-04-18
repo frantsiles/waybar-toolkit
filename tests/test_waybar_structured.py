@@ -3,6 +3,7 @@ from __future__ import annotations
 from waybar_toolkit.waybar.structured import (
     ALIGN_KEYS,
     build_layout_payload,
+    build_module_catalog,
     extract_module_buckets,
 )
 
@@ -51,3 +52,19 @@ def test_extract_module_buckets_normalizes_string_and_list() -> None:
     assert buckets["modules-center"] == ["clock"]
     assert buckets["modules-right"] == ["pulseaudio", "network"]
     assert tuple(buckets.keys()) == ALIGN_KEYS
+
+
+def test_build_module_catalog_includes_known_and_existing_custom_keys() -> None:
+    catalog = build_module_catalog(
+        {
+            "modules-left": ["custom/stats", "clock"],
+            "modules-center": ["window"],
+            "custom/stats": {"exec": "foo"},
+            "group/power": {},
+        }
+    )
+
+    assert "clock" in catalog
+    assert "window" in catalog
+    assert "custom/stats" in catalog
+    assert "group/power" in catalog
