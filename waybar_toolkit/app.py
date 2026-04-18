@@ -5,12 +5,13 @@ from __future__ import annotations
 import gi
 import sys
 
-gi.require_version("Gtk", "4")
+gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, Gio, GLib  # noqa: E402
 
 from waybar_toolkit.main_window import MainWindow
 from waybar_toolkit.monitors.monitor_window import MonitorWindow
 from waybar_toolkit.processes.process_window import ProcessWindow
+from waybar_toolkit.waybar.waybar_window import WaybarConfigWindow
 from waybar_toolkit.monitors.backend import MonitorBackend
 from waybar_toolkit.monitors.gpu_backend import GPUBackend
 
@@ -28,6 +29,7 @@ class WaybarToolkitApp(Gtk.Application):
         )
         self._direct_monitor = False
         self._direct_processes = False
+        self._direct_waybar = False
         self.monitor_backend = MonitorBackend()
         self.gpu_backend = GPUBackend()
 
@@ -48,6 +50,14 @@ class WaybarToolkitApp(Gtk.Application):
             "Open Process Manager directly",
             None,
         )
+        self.add_main_option(
+            "waybar",
+            ord("w"),
+            GLib.OptionFlags.NONE,
+            GLib.OptionArg.NONE,
+            "Open Waybar Config Manager directly",
+            None,
+        )
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict()
@@ -55,6 +65,8 @@ class WaybarToolkitApp(Gtk.Application):
             self._direct_monitor = True
         if options.contains("processes"):
             self._direct_processes = True
+        if options.contains("waybar"):
+            self._direct_waybar = True
         self.activate()
         return 0
 
@@ -69,6 +81,8 @@ class WaybarToolkitApp(Gtk.Application):
             win = MonitorWindow(self)
         elif self._direct_processes:
             win = ProcessWindow(self)
+        elif self._direct_waybar:
+            win = WaybarConfigWindow(self)
         else:
             win = MainWindow(self)
 

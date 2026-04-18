@@ -1,0 +1,2 @@
+"""Waybar configuration management module."""
+

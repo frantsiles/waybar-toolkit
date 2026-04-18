@@ -9,6 +9,7 @@ from gi.repository import Gtk  # noqa: E402
 
 from waybar_toolkit.monitors.monitor_window import MonitorWindow
 from waybar_toolkit.processes.process_window import ProcessWindow
+from waybar_toolkit.waybar.waybar_window import WaybarConfigWindow
 
 
 CSS_HUB = """
@@ -118,8 +119,8 @@ class MainWindow(Gtk.ApplicationWindow):
         # Placeholder for future utilities
         grid.append(
             self._make_utility_button(
-                "➕", "More soon...", "Utilities will be added here",
-                None,
+                "📦", "Waybar", "Visual editor for waybar config",
+                self._open_waybar,
             )
         )
 
@@ -162,4 +163,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _open_processes(self) -> None:
         win = ProcessWindow(self._app)
+        win.present()
+
+    def _open_waybar(self) -> None:
+        win = WaybarConfigWindow(self._app)
         win.present()

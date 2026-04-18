@@ -32,6 +32,12 @@ Built with **Python + GTK4**. Manage your monitors, identify displays, swap posi
 - **Apply** — Instantly apply changes via `hyprctl` or `wlr-randr`
 - **Profiles** — Save and load named monitor layouts (e.g. "docked", "gaming")
 
+### Waybar Config Manager
+- **Visual node blocks** — View top-level Waybar config nodes as clickable cards
+- **Per-node editor popup** — Click a node to open and edit its JSON value
+- **Backups** — Create timestamped backups and restore them from the UI
+- **Simple first version** — Focused on top-level nodes for fast and safe iteration
+
 ### Waybar Integration
 - Custom Waybar module with one-click access
 - Left-click opens the utility hub, right-click opens Monitor Manager directly
@@ -196,6 +202,10 @@ waybar-toolkit --monitors
 # Open Process Manager directly
 waybar-toolkit -p
 waybar-toolkit --processes
+
+# Open Waybar Config Manager directly
+waybar-toolkit -w
+waybar-toolkit --waybar
 
 # Print system stats as JSON (for Waybar)
 waybar-toolkit-stats
