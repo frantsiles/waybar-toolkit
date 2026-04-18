@@ -6,19 +6,28 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+
+import gi
+
 from waybar_toolkit.waybar.config_backend import (
     WaybarBackupError,
     WaybarConfigError,
     WaybarConfigManager,
     WaybarConfigParseError,
 )
-
-import gi
+from waybar_toolkit.waybar.structured import (
+    ALIGN_KEYS,
+    LAYOUT_BOOLEAN_KEYS,
+    LAYOUT_NUMERIC_KEYS,
+    LAYOUT_TEXT_KEYS,
+    build_layout_payload,
+    extract_module_buckets,
+)
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Pango  # noqa: E402
-
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, GObject, Gtk, Pango  # noqa: E402
 
 CSS = """
 .waybar-window {
@@ -71,6 +80,32 @@ CSS = """
     font-size: 11px;
     color: alpha(@window_fg_color, 0.65);
 }
+.structured-wrap {
+    margin: 10px 12px 8px 12px;
+    padding: 10px;
+    border-radius: 8px;
+    background-color: @card_bg_color;
+}
+.structured-title {
+    font-size: 13px;
+    font-weight: bold;
+    color: @window_fg_color;
+}
+.module-column {
+    background-color: alpha(@window_fg_color, 0.05);
+    border-radius: 8px;
+    padding: 8px;
+}
+.module-pill {
+    background-color: alpha(@accent_bg_color, 0.2);
+    border-radius: 12px;
+    padding: 4px 8px;
+    color: @window_fg_color;
+}
+.mini-button {
+    min-width: 24px;
+    padding: 2px 6px;
+}
 """
 
 logger = logging.getLogger(__name__)
@@ -86,6 +121,16 @@ class WaybarConfigWindow(Gtk.Window):
 
         self._manager = WaybarConfigManager()
         self._missing_config_prompt_open = False
+        self._config_data: dict[str, Any] = {}
+        self._layout_widgets: dict[str, Any] = {}
+        self._module_buckets: dict[str, list[str]] = {
+            key: [] for key in ALIGN_KEYS
+        }
+        self._module_boxes: dict[str, Gtk.Box] = {}
+        self._module_new_entry: Gtk.Entry | None = None
+        self._module_target_dropdown: Gtk.DropDown | None = None
+        self._drag_source_align: str | None = None
+        self._drag_source_index: int = -1
 
         css_provider = Gtk.CssProvider()
         css_provider.load_from_string(CSS)
@@ -153,12 +198,34 @@ class WaybarConfigWindow(Gtk.Window):
         refresh_btn.connect("clicked", lambda *_: self._reload_nodes())
         toolbar.append(refresh_btn)
 
+        apply_structured_btn = Gtk.Button(label="✔ Apply structured")
+        apply_structured_btn.add_css_class("action-button")
+        apply_structured_btn.add_css_class("toolbar-button")
+        apply_structured_btn.connect("clicked", self._on_apply_structured)
+        toolbar.append(apply_structured_btn)
+
         main_box.append(Gtk.Separator())
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_vexpand(True)
-        main_box.append(scroll)
+        content_scroll = Gtk.ScrolledWindow()
+        content_scroll.set_policy(
+            Gtk.PolicyType.AUTOMATIC,
+            Gtk.PolicyType.AUTOMATIC,
+        )
+        content_scroll.set_vexpand(True)
+        main_box.append(content_scroll)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        content_scroll.set_child(content_box)
+
+        self._build_structured_editor(content_box)
+        content_box.append(Gtk.Separator())
+
+        advanced_label = Gtk.Label(label="Advanced node editor")
+        advanced_label.add_css_class("info-label")
+        advanced_label.set_margin_start(12)
+        advanced_label.set_margin_top(8)
+        advanced_label.set_halign(Gtk.Align.START)
+        content_box.append(advanced_label)
 
         self._nodes_flow = Gtk.FlowBox()
         self._nodes_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -170,7 +237,9 @@ class WaybarConfigWindow(Gtk.Window):
         self._nodes_flow.set_margin_end(12)
         self._nodes_flow.set_margin_top(12)
         self._nodes_flow.set_margin_bottom(12)
-        scroll.set_child(self._nodes_flow)
+        self._nodes_flow.set_halign(Gtk.Align.FILL)
+        self._nodes_flow.set_hexpand(True)
+        content_box.append(self._nodes_flow)
 
         main_box.append(Gtk.Separator())
         self._status = Gtk.Label(label="Ready")
@@ -185,6 +254,8 @@ class WaybarConfigWindow(Gtk.Window):
     def _reload_nodes(self) -> None:
         self._clear_flow()
         if not self._manager.config_path.exists():
+            self._config_data = {}
+            self._clear_structured_editor()
             self._set_status(
                 "Waybar config not found. Open an existing file or create a new one."
             )
@@ -196,6 +267,8 @@ class WaybarConfigWindow(Gtk.Window):
         self._missing_config_prompt_open = False
         try:
             data = self._manager.load()
+            self._config_data = data
+            self._load_structured_editor(data)
             for key, value in data.items():
                 self._nodes_flow.append(self._make_node_card(key, value))
             self._refresh_path_label()
@@ -205,6 +278,435 @@ class WaybarConfigWindow(Gtk.Window):
         except Exception:
             logger.exception("Unexpected error loading Waybar config")
             self._set_status("Unexpected error loading Waybar config")
+
+    def _build_structured_editor(self, parent: Gtk.Box) -> None:
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        wrap.add_css_class("structured-wrap")
+        parent.append(wrap)
+
+        title = Gtk.Label(label="Structured editor")
+        title.add_css_class("structured-title")
+        title.set_halign(Gtk.Align.START)
+        wrap.append(title)
+
+        hint = Gtk.Label(
+            label=(
+                "Edit common Waybar options with forms and module pills. "
+                "Empty fields are removed when saving."
+            )
+        )
+        hint.add_css_class("info-label")
+        hint.set_halign(Gtk.Align.START)
+        hint.set_xalign(0)
+        hint.set_wrap(True)
+        hint.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        wrap.append(hint)
+
+        layout_frame = Gtk.Frame(label="Layout")
+        wrap.append(layout_frame)
+
+        layout_grid = Gtk.Grid(
+            column_spacing=12,
+            row_spacing=8,
+            margin_start=10,
+            margin_end=10,
+            margin_top=10,
+            margin_bottom=10,
+        )
+        layout_frame.set_child(layout_grid)
+
+        row = 0
+        for _key, label_text, widget in self._build_layout_widgets():
+            label = Gtk.Label(label=label_text)
+            label.add_css_class("info-label")
+            label.set_halign(Gtk.Align.END)
+            layout_grid.attach(label, 0, row, 1, 1)
+            layout_grid.attach(widget, 1, row, 1, 1)
+            row += 1
+
+        modules_frame = Gtk.Frame(label="Modules")
+        wrap.append(modules_frame)
+
+        modules_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=8,
+            margin_start=10,
+            margin_end=10,
+            margin_top=10,
+            margin_bottom=10,
+        )
+        modules_frame.set_child(modules_box)
+
+        modules_hint = Gtk.Label(
+            label=(
+                "Drag and drop module pills to reorder or move between left/center/right."
+            )
+        )
+        modules_hint.add_css_class("info-label")
+        modules_hint.set_halign(Gtk.Align.START)
+        modules_hint.set_xalign(0)
+        modules_hint.set_wrap(True)
+        modules_hint.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        modules_box.append(modules_hint)
+
+        add_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        modules_box.append(add_row)
+
+        self._module_new_entry = Gtk.Entry()
+        self._module_new_entry.set_hexpand(True)
+        self._module_new_entry.set_placeholder_text(
+            "Module name (e.g. clock, custom/stats)"
+        )
+        self._module_new_entry.connect("activate", self._on_add_module)
+        add_row.append(self._module_new_entry)
+
+        self._module_target_dropdown = Gtk.DropDown.new_from_strings(
+            list(ALIGN_KEYS)
+        )
+        add_row.append(self._module_target_dropdown)
+
+        add_btn = Gtk.Button(label="Add")
+        add_btn.add_css_class("toolbar-button")
+        add_btn.connect("clicked", self._on_add_module)
+        add_row.append(add_btn)
+
+        columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        modules_box.append(columns)
+
+        for align in ALIGN_KEYS:
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            col.set_hexpand(True)
+            col.add_css_class("module-column")
+
+            col_title = Gtk.Label(label=align)
+            col_title.add_css_class("section-title")
+            col_title.set_halign(Gtk.Align.START)
+            col.append(col_title)
+
+            rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            drop_target = Gtk.DropTarget.new(
+                GObject.TYPE_STRING,
+                Gdk.DragAction.MOVE,
+            )
+            drop_target.connect(
+                "drop",
+                self._on_module_drop_on_column,
+                align,
+            )
+            rows.add_controller(drop_target)
+            col.append(rows)
+            columns.append(col)
+            self._module_boxes[align] = rows
+
+    def _build_layout_widgets(
+        self,
+    ) -> list[tuple[str, str, Gtk.Widget]]:
+        fields: list[tuple[str, str, Gtk.Widget]] = []
+
+        def add_entry(key: str, label: str) -> None:
+            entry = Gtk.Entry()
+            entry.set_hexpand(True)
+            self._layout_widgets[key] = entry
+            fields.append((key, label, entry))
+
+        def add_dropdown(
+            key: str,
+            label: str,
+            options: list[str],
+        ) -> None:
+            dropdown = Gtk.DropDown.new_from_strings(options)
+            dropdown.set_hexpand(True)
+            self._layout_widgets[key] = dropdown
+            fields.append((key, label, dropdown))
+
+        add_entry("name", "Name")
+        add_dropdown("layer", "Layer", ["", "top", "bottom", "overlay"])
+        add_dropdown(
+            "position",
+            "Position",
+            ["", "top", "bottom", "left", "right"],
+        )
+        add_dropdown(
+            "mode",
+            "Mode",
+            ["", "dock", "hide", "invisible", "overlay"],
+        )
+        add_entry("output", "Output(s)")
+        add_entry("height", "Height")
+        add_entry("spacing", "Spacing")
+        add_entry("margin-top", "Margin Top")
+        add_entry("margin-right", "Margin Right")
+        add_entry("margin-bottom", "Margin Bottom")
+        add_entry("margin-left", "Margin Left")
+
+        for key in sorted(LAYOUT_BOOLEAN_KEYS):
+            label = key.replace("-", " ").title()
+            add_dropdown(key, label, ["", "true", "false"])
+
+        return fields
+
+    def _load_structured_editor(self, data: dict[str, Any]) -> None:
+        for key, widget in self._layout_widgets.items():
+            value = data.get(key)
+            if isinstance(widget, Gtk.Entry):
+                if key == "output" and isinstance(value, list):
+                    widget.set_text(", ".join(str(v) for v in value))
+                elif value is None:
+                    widget.set_text("")
+                else:
+                    widget.set_text(str(value))
+            elif isinstance(widget, Gtk.DropDown):
+                if key in LAYOUT_BOOLEAN_KEYS:
+                    if value is True:
+                        self._set_dropdown_value(widget, "true")
+                    elif value is False:
+                        self._set_dropdown_value(widget, "false")
+                    else:
+                        self._set_dropdown_value(widget, "")
+                else:
+                    self._set_dropdown_value(
+                        widget,
+                        "" if value is None else str(value),
+                    )
+
+        self._module_buckets = extract_module_buckets(data)
+        self._render_module_columns()
+
+    def _clear_structured_editor(self) -> None:
+        for widget in self._layout_widgets.values():
+            if isinstance(widget, Gtk.Entry):
+                widget.set_text("")
+            elif isinstance(widget, Gtk.DropDown):
+                widget.set_selected(0)
+        self._module_buckets = {key: [] for key in ALIGN_KEYS}
+        self._render_module_columns()
+
+    def _collect_layout_values(self) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for key, widget in self._layout_widgets.items():
+            if isinstance(widget, Gtk.Entry):
+                values[key] = widget.get_text()
+            elif isinstance(widget, Gtk.DropDown):
+                values[key] = self._get_dropdown_value(widget)
+        return values
+
+    def _on_apply_structured(self, *_args) -> None:
+        if not self._manager.config_path.exists():
+            self._set_status(
+                "Cannot apply structured changes: config file not found."
+            )
+            return
+        try:
+            layout_values = self._collect_layout_values()
+            layout_payload = build_layout_payload(layout_values)
+            layout_keys = (
+                set(LAYOUT_TEXT_KEYS)
+                | set(LAYOUT_NUMERIC_KEYS)
+                | set(LAYOUT_BOOLEAN_KEYS)
+            )
+            for key in layout_keys:
+                if key in layout_payload:
+                    self._manager.set_node_value(key, layout_payload[key])
+                else:
+                    self._manager.delete_node(key)
+
+            for align in ALIGN_KEYS:
+                items = [
+                    module.strip()
+                    for module in self._module_buckets.get(align, [])
+                    if module.strip()
+                ]
+                if items:
+                    self._manager.set_node_value(align, items)
+                else:
+                    self._manager.delete_node(align)
+
+            self._manager.save()
+            self._reload_nodes()
+            self._set_status("Structured changes applied")
+        except WaybarConfigError as exc:
+            self._set_status(str(exc))
+
+    def _on_add_module(self, *_args) -> None:
+        if not self._module_new_entry or not self._module_target_dropdown:
+            return
+        name = self._module_new_entry.get_text().strip()
+        if not name:
+            self._set_status("Write a module name first")
+            return
+        selected = self._module_target_dropdown.get_selected()
+        align = (
+            ALIGN_KEYS[selected]
+            if 0 <= selected < len(ALIGN_KEYS)
+            else ALIGN_KEYS[0]
+        )
+        self._module_buckets[align].append(name)
+        self._module_new_entry.set_text("")
+        self._render_module_columns()
+
+    def _render_module_columns(self) -> None:
+        for align in ALIGN_KEYS:
+            box = self._module_boxes.get(align)
+            if not box:
+                continue
+            self._clear_box(box)
+            items = self._module_buckets.get(align, [])
+            if not items:
+                empty = Gtk.Label(label="(empty)")
+                empty.add_css_class("info-label")
+                empty.set_halign(Gtk.Align.START)
+                box.append(empty)
+                continue
+
+            for idx, module_name in enumerate(items):
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                row.set_hexpand(True)
+                drag_handle = Gtk.Label(label="⠿")
+                drag_handle.add_css_class("info-label")
+                row.append(drag_handle)
+
+                pill = Gtk.Label(label=module_name)
+                pill.add_css_class("module-pill")
+                pill.set_halign(Gtk.Align.START)
+                pill.set_xalign(0)
+                pill.set_hexpand(True)
+                row.append(pill)
+
+                drag_source = Gtk.DragSource.new()
+                drag_source.set_actions(Gdk.DragAction.MOVE)
+                drag_source.connect(
+                    "prepare",
+                    self._on_module_drag_prepare,
+                    align,
+                    idx,
+                    module_name,
+                )
+                row.add_controller(drag_source)
+
+                drop_target = Gtk.DropTarget.new(
+                    GObject.TYPE_STRING,
+                    Gdk.DragAction.MOVE,
+                )
+                drop_target.connect(
+                    "drop",
+                    self._on_module_drop_on_row,
+                    align,
+                    idx,
+                )
+                row.add_controller(drop_target)
+
+                remove_btn = Gtk.Button(label="✕")
+                remove_btn.add_css_class("mini-button")
+                remove_btn.connect(
+                    "clicked",
+                    lambda *_,
+                    a=align,
+                    i=idx: self._remove_module(a, i),
+                )
+                row.append(remove_btn)
+
+                box.append(row)
+
+    def _on_module_drag_prepare(
+        self,
+        _source: Gtk.DragSource,
+        _x: float,
+        _y: float,
+        align: str,
+        index: int,
+        module_name: str,
+    ) -> Gdk.ContentProvider:
+        self._drag_source_align = align
+        self._drag_source_index = index
+        token = f"{align}:{index}:{module_name}"
+        return Gdk.ContentProvider.new_for_value(token)
+
+    def _on_module_drop_on_row(
+        self,
+        _target: Gtk.DropTarget,
+        _value: str,
+        _x: float,
+        _y: float,
+        target_align: str,
+        target_index: int,
+    ) -> bool:
+        return self._apply_drag_move(target_align, target_index)
+
+    def _on_module_drop_on_column(
+        self,
+        _target: Gtk.DropTarget,
+        _value: str,
+        _x: float,
+        _y: float,
+        target_align: str,
+    ) -> bool:
+        return self._apply_drag_move(target_align, None)
+
+    def _apply_drag_move(
+        self,
+        target_align: str,
+        target_index: int | None,
+    ) -> bool:
+        source_align = self._drag_source_align
+        source_index = self._drag_source_index
+        if source_align is None or source_index < 0:
+            return False
+
+        source_items = self._module_buckets.get(source_align, [])
+        if not (0 <= source_index < len(source_items)):
+            return False
+        module = source_items.pop(source_index)
+
+        if source_align == target_align:
+            insert_at = len(source_items) if target_index is None else target_index
+            if insert_at > source_index:
+                insert_at -= 1
+            insert_at = max(0, min(insert_at, len(source_items)))
+            source_items.insert(insert_at, module)
+        else:
+            target_items = self._module_buckets.get(target_align, [])
+            insert_at = len(target_items) if target_index is None else target_index
+            insert_at = max(0, min(insert_at, len(target_items)))
+            target_items.insert(insert_at, module)
+
+        self._drag_source_align = None
+        self._drag_source_index = -1
+        self._render_module_columns()
+        return True
+
+    def _remove_module(self, align: str, index: int) -> None:
+        modules = self._module_buckets.get(align, [])
+        if not (0 <= index < len(modules)):
+            return
+        modules.pop(index)
+        self._render_module_columns()
+
+    @staticmethod
+    def _set_dropdown_value(dropdown: Gtk.DropDown, value: str) -> None:
+        model = dropdown.get_model()
+        if not model:
+            return
+        for idx in range(model.get_n_items()):
+            if model.get_string(idx) == value:
+                dropdown.set_selected(idx)
+                return
+        dropdown.set_selected(0)
+
+    @staticmethod
+    def _get_dropdown_value(dropdown: Gtk.DropDown) -> str:
+        model = dropdown.get_model()
+        idx = dropdown.get_selected()
+        if model and 0 <= idx < model.get_n_items():
+            return model.get_string(idx)
+        return ""
+
+    @staticmethod
+    def _clear_box(box: Gtk.Box) -> None:
+        child = box.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            box.remove(child)
+            child = nxt
 
     def _make_node_card(self, key: str, value: Any) -> Gtk.Button:
         btn = Gtk.Button()

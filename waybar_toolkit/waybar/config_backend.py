@@ -312,6 +312,31 @@ def _find_top_level_value_span(
     return None
 
 
+def _find_top_level_entry_span(
+    original_text: str,
+    key: str,
+) -> tuple[int, int] | None:
+    """Return full top-level key entry span suitable for deletion."""
+    value_span = _find_top_level_value_span(original_text, key)
+    if value_span is None:
+        return None
+
+    key_start, _value_start, value_end, _key_indent = value_span
+    masked = _mask_jsonc_comments(original_text)
+
+    after_value = _skip_ws(masked, value_end)
+    if after_value < len(masked) and masked[after_value] == ",":
+        return key_start, after_value + 1
+
+    # Last item in object: remove preceding comma if present.
+    before_key = key_start - 1
+    while before_key >= 0 and masked[before_key] in " \t\r\n":
+        before_key -= 1
+    if before_key >= 0 and masked[before_key] == ",":
+        return before_key, value_end
+    return key_start, value_end
+
+
 def _detect_indent_unit(text: str) -> str:
     """Detect indentation style from top-level keys; fallback to 4 spaces."""
     indents = [
@@ -359,6 +384,7 @@ class WaybarConfigManager:
         self._data: dict[str, Any] | None = None
         self._original_text: str | None = None
         self._dirty_keys: list[str] = []
+        self._deleted_keys: list[str] = []
 
     @property
     def config_path(self) -> Path:
@@ -370,6 +396,7 @@ class WaybarConfigManager:
         self._data = None
         self._original_text = None
         self._dirty_keys = []
+        self._deleted_keys = []
 
     def create_new_config(self, path: Path | None = None) -> Path:
         """Create a new config file and set it as active path."""
@@ -404,6 +431,7 @@ class WaybarConfigManager:
         self._data = parsed
         self._original_text = raw
         self._dirty_keys = []
+        self._deleted_keys = []
         return parsed
 
     def save(self) -> None:
@@ -412,11 +440,16 @@ class WaybarConfigManager:
             self.load()
         assert self._data is not None
         assert self._original_text is not None
-
-        if not self._dirty_keys:
+        if not self._dirty_keys and not self._deleted_keys:
             return
 
         text = self._original_text
+        for key in list(self._deleted_keys):
+            entry_span = _find_top_level_entry_span(text, key)
+            if entry_span is None:
+                continue
+            start, end = entry_span
+            text = text[:start] + text[end:]
         indent_unit = _detect_indent_unit(text)
         for key in self._dirty_keys:
             span = _find_top_level_value_span(text, key)
@@ -437,6 +470,7 @@ class WaybarConfigManager:
         self._config_path.write_text(text, encoding="utf-8")
         self._original_text = text
         self._dirty_keys = []
+        self._deleted_keys = []
 
     def get_node_keys(self) -> list[str]:
         """Return top-level node keys in insertion order."""
@@ -455,8 +489,21 @@ class WaybarConfigManager:
         data = self._data if self._data is not None else self.load()
         data[key] = value
         self._data = data
+        if key in self._deleted_keys:
+            self._deleted_keys.remove(key)
         if key not in self._dirty_keys:
             self._dirty_keys.append(key)
+
+    def delete_node(self, key: str) -> None:
+        """Delete a top-level node from the config."""
+        data = self._data if self._data is not None else self.load()
+        if key in data:
+            del data[key]
+            self._data = data
+            if key in self._dirty_keys:
+                self._dirty_keys.remove(key)
+            if key not in self._deleted_keys:
+                self._deleted_keys.append(key)
 
     def backup_now(self) -> Path:
         """Create a timestamped backup copy of the current config."""
@@ -483,4 +530,5 @@ class WaybarConfigManager:
         self._data = None
         self._original_text = None
         self._dirty_keys = []
+        self._deleted_keys = []
         return self._config_path

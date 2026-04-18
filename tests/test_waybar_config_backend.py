@@ -55,6 +55,27 @@ def test_set_config_path_switches_active_file(tmp_path: Path) -> None:
     data_b = manager.load()
     assert data_b["name"] == "b"
     assert manager.config_path == config_b
+def test_delete_node_removes_key_from_saved_config(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        """{
+  "layer": "top",
+  "modules-right": ["clock"],
+  "position": "top"
+}
+""",
+        encoding="utf-8",
+    )
+    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "bk")
+    manager.load()
+
+    manager.delete_node("modules-right")
+    manager.save()
+
+    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "bk")
+    data = reloaded.load()
+    assert "modules-right" not in data
+    assert data["layer"] == "top"
 
 
 def test_create_new_config_at_custom_path(tmp_path: Path) -> None:
