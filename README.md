@@ -71,6 +71,22 @@ Or use the install script:
 ./scripts/install.sh
 ```
 
+### Serena MCP (desarrollo)
+
+Para iniciar Serena apuntando a este proyecto:
+
+```bash
+./scripts/start-serena.sh
+```
+
+Comando directo equivalente:
+
+```bash
+uvx --from git+https://github.com/oraios/serena serena start-mcp-server --project /home/frantsiles/waybar-toolkit
+```
+
+Luego puedes abrir el dashboard en la URL que Serena muestre al iniciar (por ejemplo `http://127.0.0.1:24283/dashboard/index.html`).
+
 ### AUR (maintainer workflow)
 
 This repository includes AUR template files for a `-git` package at:
@@ -118,6 +134,53 @@ git push
 git clone https://github.com/frantsiles/waybar-toolkit.git
 cd waybar-toolkit
 pip install --user .
+```
+
+### Install directly from GitHub release tag (recommended on Arch: pipx)
+
+```bash
+sudo pacman -S python-pipx
+pipx ensurepath
+pipx install "git+https://github.com/frantsiles/waybar-toolkit.git@v0.3.2"
+```
+
+After `pipx ensurepath`, open a new terminal or run:
+
+```bash
+source ~/.bashrc
+```
+
+Then verify:
+
+```bash
+command -v waybar-toolkit
+command -v waybar-toolkit-stats
+```
+
+## Troubleshooting
+
+### `error: externally-managed-environment` on Arch
+
+This is expected (PEP 668) when trying to install non-pacman Python apps with plain `pip` into the system/user environment.  
+Use `pipx` or a virtualenv instead.
+
+### `command not found` after `pipx install`
+
+Your shell may not have reloaded `PATH` yet:
+
+```bash
+source ~/.bashrc
+```
+
+or open a new terminal.
+
+### `pipx` warns about missing/incorrect app symlinks
+
+If old wrappers already exist in `~/.local/bin`, recreate them via `pipx`:
+
+```bash
+rm -f ~/.local/bin/waybar-toolkit ~/.local/bin/waybar-toolkit-stats
+pipx reinstall waybar-toolkit
 ```
 
 ## Usage
