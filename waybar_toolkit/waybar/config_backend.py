@@ -381,22 +381,60 @@ class WaybarConfigManager:
         self._config_path = config_path or DEFAULT_WAYBAR_CONFIG
         self._backup_dir = backup_dir or DEFAULT_BACKUP_DIR
         self._backup_dir.mkdir(parents=True, exist_ok=True)
+        self._root_data: dict[str, Any] | list[dict[str, Any]] | None = None
         self._data: dict[str, Any] | None = None
         self._original_text: str | None = None
         self._dirty_keys: list[str] = []
         self._deleted_keys: list[str] = []
+        self._active_bar_index = 0
 
     @property
     def config_path(self) -> Path:
         return self._config_path
+    @property
+    def active_bar_index(self) -> int:
+        return self._active_bar_index
+
+    @property
+    def bar_count(self) -> int:
+        if isinstance(self._root_data, list):
+            return len(self._root_data)
+        return 1
+
+    def set_active_bar_index(self, index: int) -> None:
+        if index < 0:
+            raise WaybarConfigError("Bar index must be >= 0")
+        if self._root_data is None:
+            self.load()
+        assert self._root_data is not None
+        if isinstance(self._root_data, list):
+            if index >= len(self._root_data):
+                raise WaybarConfigError(
+                    f"Bar index out of range: {index}"
+                )
+            self._active_bar_index = index
+            self._data = self._root_data[index]
+            return
+        if index != 0:
+            raise WaybarConfigError(
+                "Single-bar config supports only index 0"
+            )
+        self._active_bar_index = 0
+        self._data = self._root_data
+
+    def get_active_bar_data(self) -> dict[str, Any]:
+        data = self._data if self._data is not None else self.load()
+        return dict(data)
 
     def set_config_path(self, path: Path) -> None:
         """Switch active config path and clear in-memory state."""
         self._config_path = path.expanduser()
+        self._root_data = None
         self._data = None
         self._original_text = None
         self._dirty_keys = []
         self._deleted_keys = []
+        self._active_bar_index = 0
 
     def create_new_config(self, path: Path | None = None) -> Path:
         """Create a new config file and set it as active path."""
@@ -409,7 +447,7 @@ class WaybarConfigManager:
         return target
 
     def load(self) -> dict[str, Any]:
-        """Load and parse the Waybar JSONC config."""
+        """Load and parse the active Waybar bar config from JSON/JSONC."""
         if not self._config_path.exists():
             raise WaybarConfigError(
                 f"Config file not found: {self._config_path}"
@@ -424,47 +462,46 @@ class WaybarConfigManager:
                 f"Invalid Waybar JSONC config: {exc}"
             ) from exc
 
-        if not isinstance(parsed, dict):
+        if isinstance(parsed, dict):
+            self._root_data = parsed
+            self._active_bar_index = 0
+            self._data = parsed
+        elif isinstance(parsed, list):
+            if not parsed:
+                raise WaybarConfigParseError(
+                    "Waybar config list root cannot be empty"
+                )
+            if any(not isinstance(item, dict) for item in parsed):
+                raise WaybarConfigParseError(
+                    "Waybar config list root must contain only objects"
+                )
+            self._root_data = parsed
+            if self._active_bar_index >= len(parsed):
+                self._active_bar_index = 0
+            self._data = parsed[self._active_bar_index]
+        else:
             raise WaybarConfigParseError(
-                "Waybar config root must be a JSON object"
+                "Waybar config root must be an object or array of objects"
             )
-        self._data = parsed
         self._original_text = raw
         self._dirty_keys = []
         self._deleted_keys = []
-        return parsed
+        return self._data
 
     def save(self) -> None:
-        """Write edited nodes while preserving surrounding JSONC/comments."""
+        """Write edited nodes as normalized JSON (comments are not preserved)."""
         if self._data is None:
             self.load()
-        assert self._data is not None
-        assert self._original_text is not None
+        assert self._root_data is not None
         if not self._dirty_keys and not self._deleted_keys:
             return
-
-        text = self._original_text
-        for key in list(self._deleted_keys):
-            entry_span = _find_top_level_entry_span(text, key)
-            if entry_span is None:
-                continue
-            start, end = entry_span
-            text = text[:start] + text[end:]
-        indent_unit = _detect_indent_unit(text)
-        for key in self._dirty_keys:
-            span = _find_top_level_value_span(text, key)
-            if span is None:
-                raise WaybarConfigError(
-                    "Could not preserve formatting while saving. "
-                    f"Top-level node not found in source text: {key}"
-                )
-            _, value_start, value_end, key_indent = span
-            replacement = _serialize_value_for_jsonc(
-                self._data[key],
-                key_indent=key_indent,
-                indent_unit=indent_unit,
-            )
-            text = text[:value_start] + replacement + text[value_end:]
+        text = json.dumps(
+            self._root_data,
+            ensure_ascii=False,
+            indent=4,
+        )
+        if not text.endswith("\n"):
+            text += "\n"
 
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
         self._config_path.write_text(text, encoding="utf-8")
@@ -527,8 +564,10 @@ class WaybarConfigManager:
         if not src.exists() or not src.is_file():
             raise WaybarBackupError(f"Backup not found: {backup_name}")
         copy2(src, self._config_path)
+        self._root_data = None
         self._data = None
         self._original_text = None
         self._dirty_keys = []
         self._deleted_keys = []
+        self._active_bar_index = 0
         return self._config_path

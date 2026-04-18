@@ -9,6 +9,15 @@ from difflib import unified_diff
 from typing import Any
 
 ALIGN_KEYS = ("modules-left", "modules-center", "modules-right")
+MODULE_CATEGORY_LABELS = (
+    "All",
+    "Core",
+    "System",
+    "Connectivity",
+    "Audio",
+    "Custom",
+    "Other",
+)
 KNOWN_WAYBAR_MODULES = (
     "workspaces",
     "window",
@@ -57,6 +66,48 @@ LAYOUT_SUPPORTED_KEYS = (
     LAYOUT_NUMERIC_KEYS | LAYOUT_BOOLEAN_KEYS | LAYOUT_TEXT_KEYS
 )
 STRUCTURED_EDIT_KEYS = tuple(sorted(LAYOUT_SUPPORTED_KEYS | set(ALIGN_KEYS)))
+MODULE_CATEGORY_MAP = {
+    "workspaces": "Core",
+    "window": "Core",
+    "clock": "Core",
+    "tray": "Core",
+    "idle_inhibitor": "Core",
+    "cpu": "System",
+    "memory": "System",
+    "temperature": "System",
+    "disk": "System",
+    "battery": "System",
+    "backlight": "System",
+    "power-profiles-daemon": "System",
+    "network": "Connectivity",
+    "bluetooth": "Connectivity",
+    "language": "Connectivity",
+    "keyboard-state": "Connectivity",
+    "pulseaudio": "Audio",
+    "wireplumber": "Audio",
+}
+MODULE_TEMPLATES = {
+    "clock": {
+        "format": "{:%H:%M}",
+        "tooltip-format": "{:%Y-%m-%d %H:%M}",
+    },
+    "network": {
+        "format-wifi": "{essid} {signalStrength}%",
+        "format-ethernet": "{ifname}",
+        "tooltip": True,
+    },
+    "pulseaudio": {
+        "format": "{volume}% {icon}",
+        "format-muted": "muted",
+        "tooltip": True,
+    },
+    "custom/*": {
+        "exec": "echo '{\"text\":\"custom\"}'",
+        "interval": 5,
+        "return-type": "json",
+        "tooltip": False,
+    },
+}
 
 
 def _parse_bool(value: Any) -> bool | None:
@@ -210,6 +261,43 @@ def build_module_catalog(data: Mapping[str, Any]) -> list[str]:
     return out
 
 
+def get_module_category(module_name: str) -> str:
+    module = module_name.strip()
+    if not module:
+        return "Other"
+    if module.startswith("custom/"):
+        return "Custom"
+    return MODULE_CATEGORY_MAP.get(module, "Other")
+
+
+def filter_module_catalog(
+    catalog: list[str],
+    *,
+    query: str = "",
+    category: str = "All",
+) -> list[str]:
+    filtered: list[str] = []
+    q = query.strip().lower()
+    for module in catalog:
+        if category != "All" and get_module_category(module) != category:
+            continue
+        if q and q not in module.lower():
+            continue
+        filtered.append(module)
+    return filtered
+
+
+def get_module_template(module_name: str) -> dict[str, Any] | None:
+    module = module_name.strip()
+    if not module:
+        return None
+    if module in MODULE_TEMPLATES:
+        return dict(MODULE_TEMPLATES[module])
+    if module.startswith("custom/"):
+        return dict(MODULE_TEMPLATES["custom/*"])
+    return None
+
+
 def normalize_module_buckets(
     buckets: Mapping[str, Any],
 ) -> dict[str, list[str]]:
@@ -229,6 +317,35 @@ def normalize_module_buckets(
                     values.append(token)
         normalized[align] = values
     return normalized
+
+
+def build_module_inspector_payload(
+    raw_values: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in ("format", "tooltip-format", "on-click", "on-click-right"):
+        value = str(raw_values.get(key, "")).strip()
+        if value:
+            payload[key] = value
+    tooltip = _parse_bool(raw_values.get("tooltip", ""))
+    if tooltip is not None:
+        payload["tooltip"] = tooltip
+    interval = _parse_number(raw_values.get("interval", ""))
+    if interval is not None:
+        payload["interval"] = interval
+    return compact_object(payload)
+
+
+def merge_module_config_with_template(
+    current: Mapping[str, Any] | None,
+    template: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    if current:
+        merged.update(dict(current))
+    if template:
+        merged.update(dict(template))
+    return compact_object(merged)
 
 
 def validate_layout_payload(raw_values: Mapping[str, Any]) -> list[str]:
@@ -282,15 +399,18 @@ def compute_structured_changes(
 
     return to_set, to_delete, target_values
 
-
-def build_structured_diff_preview(
+def collect_change_keys(
     current_data: Mapping[str, Any],
     target_values: Mapping[str, Any],
-) -> str:
-    """Build unified diff for structured top-level keys."""
-    changed_keys = [
+    *,
+    extra_keys: set[str] | None = None,
+) -> list[str]:
+    keys = set(STRUCTURED_EDIT_KEYS)
+    if extra_keys:
+        keys.update(extra_keys)
+    return [
         key
-        for key in STRUCTURED_EDIT_KEYS
+        for key in sorted(keys)
         if (key in current_data) != (key in target_values)
         or (
             key in current_data
@@ -298,6 +418,20 @@ def build_structured_diff_preview(
             and current_data[key] != target_values[key]
         )
     ]
+
+
+def build_structured_diff_preview(
+    current_data: Mapping[str, Any],
+    target_values: Mapping[str, Any],
+    *,
+    extra_keys: set[str] | None = None,
+) -> str:
+    """Build unified diff for structured top-level keys."""
+    changed_keys = collect_change_keys(
+        current_data,
+        target_values,
+        extra_keys=extra_keys,
+    )
     if not changed_keys:
         return ""
 
@@ -344,10 +478,17 @@ def _preview_change_value(value: Any) -> str:
 def build_structured_change_summary(
     current_data: Mapping[str, Any],
     target_values: Mapping[str, Any],
+    *,
+    extra_keys: set[str] | None = None,
 ) -> str:
     """Build a human-readable summary of structured key changes."""
     lines: list[str] = []
-    for key in STRUCTURED_EDIT_KEYS:
+    changed_keys = collect_change_keys(
+        current_data,
+        target_values,
+        extra_keys=extra_keys,
+    )
+    for key in changed_keys:
         has_current = key in current_data
         has_target = key in target_values
         if not has_current and not has_target:

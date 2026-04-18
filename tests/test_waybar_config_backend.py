@@ -55,6 +55,54 @@ def test_set_config_path_switches_active_file(tmp_path: Path) -> None:
     data_b = manager.load()
     assert data_b["name"] == "b"
     assert manager.config_path == config_b
+
+
+def test_load_multibar_config_and_switch_active_bar(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        """[
+  {"name": "primary", "layer": "top"},
+  {"name": "secondary", "layer": "bottom"}
+]
+""",
+        encoding="utf-8",
+    )
+    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+
+    first = manager.load()
+    assert first["name"] == "primary"
+    assert manager.bar_count == 2
+    assert manager.active_bar_index == 0
+
+    manager.set_active_bar_index(1)
+    second = manager.get_active_bar_data()
+    assert second["name"] == "secondary"
+    assert manager.active_bar_index == 1
+
+
+def test_save_updates_only_selected_bar_in_multibar_config(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        """[
+  {"name": "primary", "modules-right": ["clock"]},
+  {"name": "secondary", "modules-right": ["cpu"]}
+]
+""",
+        encoding="utf-8",
+    )
+    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    manager.load()
+    manager.set_active_bar_index(1)
+    manager.set_node_value("modules-right", ["cpu", "memory"])
+    manager.save()
+
+    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    bar_zero = reloaded.load()
+    assert bar_zero["modules-right"] == ["clock"]
+    reloaded.set_active_bar_index(1)
+    bar_one = reloaded.get_active_bar_data()
+    assert bar_one["modules-right"] == ["cpu", "memory"]
+
 def test_delete_node_removes_key_from_saved_config(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(
@@ -92,7 +140,8 @@ def test_create_new_config_at_custom_path(tmp_path: Path) -> None:
     assert created.read_text(encoding="utf-8") == "{\n}\n"
     assert manager.config_path == custom
 
-def test_save_preserves_comments_and_unedited_sections(tmp_path: Path) -> None:
+
+def test_save_rewrites_json_without_comments(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(
         """{
@@ -120,18 +169,18 @@ def test_save_preserves_comments_and_unedited_sections(tmp_path: Path) -> None:
     manager.save()
 
     saved = config.read_text(encoding="utf-8")
-    assert "// global comment" in saved
-    assert '"modules-right": ["clock", "cpu"], // keep-inline' in saved
-    assert "/* keep block */" in saved
+    assert "// global comment" not in saved
+    assert "/* keep block */" not in saved
+    assert "// keep-inline" not in saved
     assert '"layer": "top"' in saved
+    assert '"on-click": "waybar-toolkit --waybar"' in saved
 
     reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
     data = reloaded.load()
     assert data["custom/toolkit"]["format"] == "🧩"
     assert data["custom/toolkit"]["on-click"] == "waybar-toolkit --waybar"
 
-
-def test_save_preserves_comment_between_value_and_comma(tmp_path: Path) -> None:
+def test_save_removes_comments_between_value_and_comma(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(
         """{
@@ -148,7 +197,29 @@ def test_save_preserves_comment_between_value_and_comma(tmp_path: Path) -> None:
     manager.save()
 
     saved = config.read_text(encoding="utf-8")
-    assert "/* keep-this-comment */" in saved
+    assert "/* keep-this-comment */" not in saved
+
+
+def test_save_allows_new_top_level_keys(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        """{
+    // initial comment
+    "layer": "top"
+}
+""",
+        encoding="utf-8",
+    )
+    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    manager.load()
+
+    manager.set_node_value("modules-right", ["clock", "cpu"])
+    manager.save()
+
+    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    data = reloaded.load()
+    assert data["layer"] == "top"
+    assert data["modules-right"] == ["clock", "cpu"]
 
 
 def test_backup_and_restore(tmp_path: Path) -> None:

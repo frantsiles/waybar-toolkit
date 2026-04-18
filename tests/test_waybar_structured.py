@@ -4,10 +4,15 @@ from waybar_toolkit.waybar.structured import (
     ALIGN_KEYS,
     build_layout_payload,
     build_module_catalog,
+    build_module_inspector_payload,
     build_structured_change_summary,
     build_structured_diff_preview,
     compute_structured_changes,
     extract_module_buckets,
+    filter_module_catalog,
+    get_module_category,
+    get_module_template,
+    merge_module_config_with_template,
     validate_layout_payload,
 )
 
@@ -158,3 +163,73 @@ def test_build_structured_change_summary_for_non_technical_preview() -> None:
     assert "Update 'layer': top -> bottom" in summary
     assert "Remove 'modules-right'" in summary
     assert "Add 'modules-center': [clock, cpu]" in summary
+
+
+def test_filter_module_catalog_by_category_and_query() -> None:
+    catalog = ["clock", "cpu", "pulseaudio", "custom/stats"]
+
+    filtered = filter_module_catalog(
+        catalog,
+        category="Audio",
+        query="pulse",
+    )
+
+    assert filtered == ["pulseaudio"]
+
+
+def test_get_module_category_and_template_for_custom_module() -> None:
+    assert get_module_category("custom/stats") == "Custom"
+    template = get_module_template("custom/stats")
+    assert template is not None
+    assert template["return-type"] == "json"
+
+
+def test_build_module_inspector_payload_compacts_empty_fields() -> None:
+    payload = build_module_inspector_payload(
+        {
+            "format": " {volume}% ",
+            "tooltip": "true",
+            "interval": "5",
+            "tooltip-format": "",
+            "on-click": "pavucontrol",
+            "on-click-right": " ",
+        }
+    )
+
+    assert payload["format"] == "{volume}%"
+    assert payload["tooltip"] is True
+    assert payload["interval"] == 5
+    assert payload["on-click"] == "pavucontrol"
+    assert "tooltip-format" not in payload
+    assert "on-click-right" not in payload
+
+
+def test_merge_module_config_with_template() -> None:
+    merged = merge_module_config_with_template(
+        {"tooltip": False, "format": "{value}"},
+        {"tooltip": True, "interval": 5},
+    )
+
+    assert merged["format"] == "{value}"
+    assert merged["tooltip"] is True
+    assert merged["interval"] == 5
+
+
+def test_diff_and_summary_include_extra_keys() -> None:
+    current = {"layer": "top", "clock": {"format": "old"}}
+    target = {"layer": "top", "clock": {"format": "new"}}
+
+    diff = build_structured_diff_preview(
+        current,
+        target,
+        extra_keys={"clock"},
+    )
+    summary = build_structured_change_summary(
+        current,
+        target,
+        extra_keys={"clock"},
+    )
+
+    assert '"format": "old"' in diff
+    assert '"format": "new"' in diff
+    assert "Update 'clock'" in summary
