@@ -364,6 +364,23 @@ class WaybarConfigManager:
     def config_path(self) -> Path:
         return self._config_path
 
+    def set_config_path(self, path: Path) -> None:
+        """Switch active config path and clear in-memory state."""
+        self._config_path = path.expanduser()
+        self._data = None
+        self._original_text = None
+        self._dirty_keys = []
+
+    def create_new_config(self, path: Path | None = None) -> Path:
+        """Create a new config file and set it as active path."""
+        target = (path or self._config_path).expanduser()
+        if target.exists():
+            raise WaybarConfigError(f"Config file already exists: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{\n}\n", encoding="utf-8")
+        self.set_config_path(target)
+        return target
+
     def load(self) -> dict[str, Any]:
         """Load and parse the Waybar JSONC config."""
         if not self._config_path.exists():

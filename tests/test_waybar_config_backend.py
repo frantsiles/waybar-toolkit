@@ -40,6 +40,37 @@ def test_set_node_value_and_save(tmp_path: Path) -> None:
     data = reloaded.load()
     assert data["a"] == {"x": True, "n": 2}
 
+
+def test_set_config_path_switches_active_file(tmp_path: Path) -> None:
+    config_a = tmp_path / "a.jsonc"
+    config_b = tmp_path / "b.jsonc"
+    config_a.write_text('{"name": "a"}', encoding="utf-8")
+    config_b.write_text('{"name": "b"}', encoding="utf-8")
+
+    manager = WaybarConfigManager(config_path=config_a, backup_dir=tmp_path / "bk")
+    data_a = manager.load()
+    assert data_a["name"] == "a"
+
+    manager.set_config_path(config_b)
+    data_b = manager.load()
+    assert data_b["name"] == "b"
+    assert manager.config_path == config_b
+
+
+def test_create_new_config_at_custom_path(tmp_path: Path) -> None:
+    custom = tmp_path / "nested" / "my-waybar.jsonc"
+    manager = WaybarConfigManager(
+        config_path=tmp_path / "unused.jsonc",
+        backup_dir=tmp_path / "bk",
+    )
+
+    created = manager.create_new_config(custom)
+
+    assert created == custom
+    assert created.exists()
+    assert created.read_text(encoding="utf-8") == "{\n}\n"
+    assert manager.config_path == custom
+
 def test_save_preserves_comments_and_unedited_sections(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(

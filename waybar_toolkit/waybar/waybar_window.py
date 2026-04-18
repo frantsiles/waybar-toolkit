@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
-
-import gi
-
-gi.require_version("Gtk", "4.0")
-gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Pango  # noqa: E402
-
 from waybar_toolkit.waybar.config_backend import (
     WaybarBackupError,
     WaybarConfigError,
     WaybarConfigManager,
     WaybarConfigParseError,
 )
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Pango", "1.0")
+from gi.repository import Gtk, Pango  # noqa: E402
 
 
 CSS = """
@@ -85,6 +85,7 @@ class WaybarConfigWindow(Gtk.Window):
         self.add_css_class("waybar-window")
 
         self._manager = WaybarConfigManager()
+        self._missing_config_prompt_open = False
 
         css_provider = Gtk.CssProvider()
         css_provider.load_from_string(CSS)
@@ -111,12 +112,24 @@ class WaybarConfigWindow(Gtk.Window):
         title.add_css_class("section-title")
         toolbar.append(title)
 
-        path_lbl = Gtk.Label(label=str(self._manager.config_path))
-        path_lbl.add_css_class("info-label")
-        path_lbl.set_xalign(0)
-        path_lbl.set_hexpand(True)
-        path_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        toolbar.append(path_lbl)
+        self._path_label = Gtk.Label(label=str(self._manager.config_path))
+        self._path_label.add_css_class("info-label")
+        self._path_label.set_xalign(0)
+        self._path_label.set_hexpand(True)
+        self._path_label.set_ellipsize(Pango.EllipsizeMode.END)
+        toolbar.append(self._path_label)
+
+        open_btn = Gtk.Button(label="📄 Open config")
+        open_btn.add_css_class("action-button")
+        open_btn.add_css_class("toolbar-button")
+        open_btn.connect("clicked", self._on_open_config)
+        toolbar.append(open_btn)
+
+        new_btn = Gtk.Button(label="🆕 New config")
+        new_btn.add_css_class("action-button")
+        new_btn.add_css_class("toolbar-button")
+        new_btn.connect("clicked", self._on_new_config)
+        toolbar.append(new_btn)
 
         backup_btn = Gtk.Button(label="💾 Backup")
         backup_btn.add_css_class("action-button")
@@ -171,10 +184,21 @@ class WaybarConfigWindow(Gtk.Window):
 
     def _reload_nodes(self) -> None:
         self._clear_flow()
+        if not self._manager.config_path.exists():
+            self._set_status(
+                "Waybar config not found. Open an existing file or create a new one."
+            )
+            self._refresh_path_label()
+            self._refresh_backups()
+            if not self._missing_config_prompt_open:
+                self._show_missing_config_prompt()
+            return
+        self._missing_config_prompt_open = False
         try:
             data = self._manager.load()
             for key, value in data.items():
                 self._nodes_flow.append(self._make_node_card(key, value))
+            self._refresh_path_label()
             self._set_status(f"{len(data)} node(s) loaded")
         except WaybarConfigError as exc:
             self._set_status(str(exc))
@@ -225,7 +249,7 @@ class WaybarConfigWindow(Gtk.Window):
 
     def _on_edit_node_response(
         self,
-        dialog: "_NodeEditorDialog",
+        dialog: _NodeEditorDialog,
         response_id: str,
         key: str,
     ) -> None:
@@ -272,11 +296,87 @@ class WaybarConfigWindow(Gtk.Window):
         except WaybarBackupError as exc:
             self._set_status(str(exc))
 
+    def _on_open_config(self, *_args) -> None:
+        chooser = Gtk.FileChooserNative(
+            title="Open Waybar config",
+            transient_for=self,
+            action=Gtk.FileChooserAction.OPEN,
+            accept_label="Open",
+            cancel_label="Cancel",
+        )
+        chooser.connect("response", self._on_open_config_response)
+        chooser.show()
+
+    def _on_open_config_response(
+        self,
+        chooser: Gtk.FileChooserNative,
+        response_id: int,
+    ) -> None:
+        if response_id == Gtk.ResponseType.ACCEPT:
+            selected = chooser.get_file()
+            if selected and selected.get_path():
+                self._manager.set_config_path(Path(selected.get_path()))
+                self._refresh_path_label()
+                self._reload_nodes()
+        chooser.destroy()
+
+    def _on_new_config(self, *_args) -> None:
+        chooser = Gtk.FileChooserNative(
+            title="Create Waybar config",
+            transient_for=self,
+            action=Gtk.FileChooserAction.SAVE,
+            accept_label="Create",
+            cancel_label="Cancel",
+        )
+        chooser.set_current_name("config.jsonc")
+        chooser.set_do_overwrite_confirmation(False)
+        chooser.connect("response", self._on_new_config_response)
+        chooser.show()
+
+    def _on_new_config_response(
+        self,
+        chooser: Gtk.FileChooserNative,
+        response_id: int,
+    ) -> None:
+        if response_id == Gtk.ResponseType.ACCEPT:
+            selected = chooser.get_file()
+            if selected and selected.get_path():
+                path = Path(selected.get_path())
+                try:
+                    self._manager.create_new_config(path)
+                    self._refresh_path_label()
+                    self._reload_nodes()
+                    self._set_status(f"Created config: {path}")
+                except WaybarConfigError as exc:
+                    self._set_status(str(exc))
+        chooser.destroy()
+
+    def _show_missing_config_prompt(self) -> None:
+        self._missing_config_prompt_open = True
+        prompt = _MissingConfigDialog(self, str(self._manager.config_path))
+        prompt.connect("response", self._on_missing_config_prompt_response)
+        prompt.present()
+
+    def _on_missing_config_prompt_response(
+        self,
+        dialog: _MissingConfigDialog,
+        response_id: str,
+    ) -> None:
+        self._missing_config_prompt_open = False
+        if response_id == "open":
+            self._on_open_config()
+        elif response_id == "create":
+            self._on_new_config()
+        dialog.close()
+
     def _refresh_backups(self) -> None:
         names = [p.name for p in self._manager.list_backups()]
         if not names:
             names = ["(none)"]
         self._backup_dropdown.set_model(Gtk.StringList.new(names))
+
+    def _refresh_path_label(self) -> None:
+        self._path_label.set_text(str(self._manager.config_path))
 
     def _clear_flow(self) -> None:
         child = self._nodes_flow.get_first_child()
@@ -390,4 +490,81 @@ class _NodeEditorDialog(Gtk.Window):
 
     def show_error(self, message: str) -> None:
         self._error_label.set_text(message)
+
+
+class _MissingConfigDialog(Gtk.Window):
+    """Prompt shown when default Waybar config path does not exist."""
+
+    def __init__(self, parent: Gtk.Window, missing_path: str) -> None:
+        super().__init__(
+            title="Waybar config not found",
+            transient_for=parent,
+            modal=True,
+            default_width=520,
+            default_height=170,
+        )
+        self._response_callback = None
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10,
+            margin_start=14,
+            margin_end=14,
+            margin_top=14,
+            margin_bottom=14,
+        )
+        self.set_child(box)
+
+        title = Gtk.Label(label="Default Waybar config was not found.")
+        title.add_css_class("section-title")
+        title.set_halign(Gtk.Align.START)
+        box.append(title)
+
+        path_label = Gtk.Label(label=missing_path)
+        path_label.add_css_class("info-label")
+        path_label.set_halign(Gtk.Align.START)
+        path_label.set_xalign(0)
+        path_label.set_ellipsize(Pango.EllipsizeMode.END)
+        box.append(path_label)
+
+        hint = Gtk.Label(
+            label="Choose one option: open an existing config file or create a new file at a path you select."
+        )
+        hint.add_css_class("info-label")
+        hint.set_halign(Gtk.Align.START)
+        hint.set_wrap(True)
+        hint.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        hint.set_xalign(0)
+        box.append(hint)
+
+        actions = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+            halign=Gtk.Align.END,
+        )
+        box.append(actions)
+
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda *_: self._emit_response("cancel"))
+        actions.append(cancel)
+
+        open_btn = Gtk.Button(label="Open file…")
+        open_btn.add_css_class("toolbar-button")
+        open_btn.connect("clicked", lambda *_: self._emit_response("open"))
+        actions.append(open_btn)
+
+        create_btn = Gtk.Button(label="Create new…")
+        create_btn.add_css_class("toolbar-button")
+        create_btn.connect("clicked", lambda *_: self._emit_response("create"))
+        actions.append(create_btn)
+
+    def connect(self, signal: str, callback, *user_data):
+        if signal == "response":
+            self._response_callback = (callback, user_data)
+        return self
+
+    def _emit_response(self, response_id: str) -> None:
+        if self._response_callback:
+            callback, user_data = self._response_callback
+            callback(self, response_id, *user_data)
 
