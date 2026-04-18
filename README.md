@@ -71,6 +71,22 @@ Or use the install script:
 ./scripts/install.sh
 ```
 
+### Serena MCP (desarrollo)
+
+Para iniciar Serena apuntando a este proyecto:
+
+```bash
+./scripts/start-serena.sh
+```
+
+Comando directo equivalente:
+
+```bash
+uvx --from git+https://github.com/oraios/serena serena start-mcp-server --project /home/frantsiles/waybar-toolkit
+```
+
+Luego puedes abrir el dashboard en la URL que Serena muestre al iniciar (por ejemplo `http://127.0.0.1:24283/dashboard/index.html`).
+
 ### AUR (maintainer workflow)
 
 This repository includes AUR template files for a `-git` package at:
