@@ -12,7 +12,9 @@ from waybar_toolkit.waybar.structured import (
     filter_module_catalog,
     get_module_category,
     get_module_template,
+    get_network_profile_template,
     merge_module_config_with_template,
+    normalize_layout_aliases,
     validate_layout_payload,
 )
 
@@ -124,6 +126,35 @@ def test_compute_structured_changes_builds_set_and_delete_lists() -> None:
     assert "modules-right" not in target_values
 
 
+def test_normalize_layout_aliases_maps_legacy_mod_to_mode() -> None:
+    payload, cleanup = normalize_layout_aliases(
+        {"mod": "dock"},
+        {},
+    )
+
+    assert payload["mode"] == "dock"
+    assert cleanup == {"mod"}
+
+
+def test_normalize_layout_aliases_prefers_existing_mode() -> None:
+    payload, cleanup = normalize_layout_aliases(
+        {"mod": "dock", "mode": "overlay"},
+        {},
+    )
+
+    assert "mode" not in payload
+    assert cleanup == {"mod"}
+
+def test_normalize_layout_aliases_removes_invalid_legacy_mod_key() -> None:
+    payload, cleanup = normalize_layout_aliases(
+        {"mod": "invalid-value"},
+        {},
+    )
+
+    assert payload == {}
+    assert cleanup == {"mod"}
+
+
 def test_build_structured_diff_preview_for_changed_fields() -> None:
     current = {
         "layer": "top",
@@ -182,6 +213,14 @@ def test_get_module_category_and_template_for_custom_module() -> None:
     template = get_module_template("custom/stats")
     assert template is not None
     assert template["return-type"] == "json"
+
+
+def test_get_network_profile_template() -> None:
+    detailed = get_network_profile_template("detailed")
+    assert detailed is not None
+    assert "format-wifi" in detailed
+    assert detailed["tooltip"] is True
+    assert get_network_profile_template("unknown") is None
 
 
 def test_build_module_inspector_payload_compacts_empty_fields() -> None:

@@ -62,6 +62,7 @@ LAYOUT_TEXT_KEYS = {
     "name",
     "output",
 }
+VALID_MODE_VALUES = {"dock", "hide", "invisible", "overlay"}
 LAYOUT_SUPPORTED_KEYS = (
     LAYOUT_NUMERIC_KEYS | LAYOUT_BOOLEAN_KEYS | LAYOUT_TEXT_KEYS
 )
@@ -219,6 +220,35 @@ def build_layout_payload(raw_values: Mapping[str, Any]) -> dict[str, Any]:
     return compact_object(payload)
 
 
+def normalize_layout_aliases(
+    current_data: Mapping[str, Any],
+    layout_payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], set[str]]:
+    """Normalize known layout aliases and report keys that should be removed."""
+    payload = dict(layout_payload)
+    cleanup_keys: set[str] = set()
+    current_mode = current_data.get("mode")
+    has_valid_current_mode = (
+        isinstance(current_mode, str)
+        and current_mode.strip() in VALID_MODE_VALUES
+    )
+    payload_mode = payload.get("mode")
+    has_valid_payload_mode = (
+        isinstance(payload_mode, str)
+        and payload_mode.strip() in VALID_MODE_VALUES
+    )
+    legacy_mode = current_data.get("mod")
+    if "mod" in current_data:
+        cleanup_keys.add("mod")
+    if isinstance(legacy_mode, str):
+        normalized_legacy = legacy_mode.strip()
+        if normalized_legacy in VALID_MODE_VALUES:
+            if not has_valid_payload_mode and not has_valid_current_mode:
+                payload["mode"] = normalized_legacy
+
+    return payload, cleanup_keys
+
+
 def extract_module_buckets(data: Mapping[str, Any]) -> dict[str, list[str]]:
     """Return module arrays grouped by alignment keys."""
     buckets: dict[str, list[str]] = {key: [] for key in ALIGN_KEYS}
@@ -287,6 +317,29 @@ def filter_module_catalog(
     return filtered
 
 
+NETWORK_PROFILE_TEMPLATES = {
+    "compact": {
+        "format-wifi": "{signalStrength}% {icon}",
+        "format-ethernet": "{ifname}",
+        "format-disconnected": "offline",
+        "tooltip": False,
+    },
+    "detailed": {
+        "format-wifi": "{essid} {signalStrength}% {icon}",
+        "format-ethernet": "{ifname} {ipaddr}",
+        "format-linked": "{ifname} (no IP)",
+        "tooltip-format-wifi": "{essid}\\n{ipaddr}/{cidr}\\n{bandwidthUpBytes}↑ {bandwidthDownBytes}↓",
+        "tooltip-format-ethernet": "{ifname}\\n{ipaddr}/{cidr}\\n{bandwidthUpBytes}↑ {bandwidthDownBytes}↓",
+        "tooltip": True,
+    },
+    "minimal": {
+        "format-wifi": "{icon}",
+        "format-ethernet": "LAN",
+        "format-disconnected": "×",
+        "tooltip": True,
+    },
+}
+
 def get_module_template(module_name: str) -> dict[str, Any] | None:
     module = module_name.strip()
     if not module:
@@ -296,6 +349,16 @@ def get_module_template(module_name: str) -> dict[str, Any] | None:
     if module.startswith("custom/"):
         return dict(MODULE_TEMPLATES["custom/*"])
     return None
+
+
+def get_network_profile_template(
+    profile_name: str,
+) -> dict[str, Any] | None:
+    profile = profile_name.strip().lower()
+    template = NETWORK_PROFILE_TEMPLATES.get(profile)
+    if template is None:
+        return None
+    return dict(template)
 
 
 def normalize_module_buckets(

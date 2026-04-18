@@ -29,7 +29,9 @@ from waybar_toolkit.waybar.structured import (
     filter_module_catalog,
     get_module_category,
     get_module_template,
+    get_network_profile_template,
     merge_module_config_with_template,
+    normalize_layout_aliases,
     normalize_module_buckets,
     validate_layout_payload,
 )
@@ -136,6 +138,15 @@ CSS = """
 .inspector-wrap {
     margin-top: 8px;
 }
+.diff-summary-add {
+    color: #2ecc71;
+}
+.diff-summary-update {
+    color: #f1c40f;
+}
+.diff-summary-remove {
+    color: #e74c3c;
+}
 .mini-button {
     min-width: 24px;
     padding: 2px 6px;
@@ -176,6 +187,7 @@ class WaybarConfigWindow(Gtk.Window):
         self._module_overrides: dict[str, dict[str, Any]] = {}
         self._module_inspector_widgets: dict[str, Gtk.Widget] = {}
         self._module_inspector_title: Gtk.Label | None = None
+        self._network_profile_dropdown: Gtk.DropDown | None = None
         self._module_trash_zone: Gtk.Box | None = None
         self._drag_source_align: str | None = None
         self._drag_source_index: int = -1
@@ -500,6 +512,35 @@ class WaybarConfigWindow(Gtk.Window):
         if self._module_selected_name == module_name:
             self._populate_module_inspector(module_name)
         self._set_status(f"Template applied to '{module_name}'")
+
+    def _on_apply_network_profile(self, *_args) -> None:
+        module_name = self._module_selected_name
+        if not module_name:
+            self._set_status("Select a module first")
+            return
+        if module_name != "network":
+            self._set_status(
+                "Network profiles only apply to 'network' module"
+            )
+            return
+        if not self._network_profile_dropdown:
+            return
+        selected = self._get_dropdown_value(self._network_profile_dropdown)
+        profile = selected.strip().lower()
+        if profile.startswith("("):
+            self._set_status("Select a network profile first")
+            return
+        template = get_network_profile_template(profile)
+        if not template:
+            self._set_status(f"Unknown network profile: {selected}")
+            return
+        current = self._read_module_config(module_name)
+        merged = merge_module_config_with_template(current, template)
+        self._module_overrides[module_name] = merged
+        self._populate_module_inspector(module_name)
+        self._set_status(
+            f"Network profile '{profile}' applied to '{module_name}'"
+        )
 
     def _collect_module_inspector_values(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
@@ -854,6 +895,15 @@ class WaybarConfigWindow(Gtk.Window):
             halign=Gtk.Align.END,
         )
         inspector_box.append(inspector_actions)
+        self._network_profile_dropdown = Gtk.DropDown.new_from_strings(
+            ["(network profile)", "compact", "detailed", "minimal"]
+        )
+        inspector_actions.append(self._network_profile_dropdown)
+
+        network_profile_btn = Gtk.Button(label="Apply network profile")
+        network_profile_btn.add_css_class("toolbar-button")
+        network_profile_btn.connect("clicked", self._on_apply_network_profile)
+        inspector_actions.append(network_profile_btn)
 
         inspector_apply = Gtk.Button(label="Apply inspector")
         inspector_apply.add_css_class("toolbar-button")
@@ -975,15 +1025,24 @@ class WaybarConfigWindow(Gtk.Window):
             return
 
         layout_payload = build_layout_payload(layout_values)
+        layout_payload, layout_cleanup_keys = normalize_layout_aliases(
+            self._config_data,
+            layout_payload,
+        )
         normalized_buckets = normalize_module_buckets(self._module_buckets)
         to_set, to_delete, target_values = compute_structured_changes(
             self._config_data,
             layout_payload,
             normalized_buckets,
         )
+        for key in sorted(layout_cleanup_keys):
+            if key in self._config_data and key not in to_delete:
+                to_delete.append(key)
         module_config_set: dict[str, dict[str, Any]] = {}
         module_config_delete: list[str] = []
         preview_target = dict(target_values)
+        for key in layout_cleanup_keys:
+            preview_target.pop(key, None)
         for module_name, payload in self._module_overrides.items():
             if payload:
                 preview_target[module_name] = payload
@@ -1001,15 +1060,18 @@ class WaybarConfigWindow(Gtk.Window):
         ):
             self._set_status("No structured changes detected")
             return
+        preview_extra_keys = set(self._module_overrides.keys()) | set(
+            layout_cleanup_keys
+        )
         friendly_summary = build_structured_change_summary(
             self._config_data,
             preview_target,
-            extra_keys=set(self._module_overrides.keys()),
+            extra_keys=preview_extra_keys,
         )
         diff_text = build_structured_diff_preview(
             self._config_data,
             preview_target,
-            extra_keys=set(self._module_overrides.keys()),
+            extra_keys=preview_extra_keys,
         )
         dialog = _StructuredDiffDialog(
             self,
@@ -1723,16 +1785,35 @@ class _StructuredDiffDialog(Gtk.Window):
         summary_scroll = Gtk.ScrolledWindow()
         summary_scroll.set_min_content_height(140)
         main.append(summary_scroll)
-
-        summary_text = Gtk.TextView()
-        summary_text.set_monospace(False)
-        summary_text.set_editable(False)
-        summary_text.set_cursor_visible(False)
-        summary_text.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        summary_text.get_buffer().set_text(
-            friendly_summary or "(No friendly summary available)"
+        summary_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=4,
+            margin_start=6,
+            margin_end=6,
+            margin_top=6,
+            margin_bottom=6,
         )
-        summary_scroll.set_child(summary_text)
+        summary_scroll.set_child(summary_box)
+        lines = [
+            line for line in friendly_summary.splitlines() if line.strip()
+        ]
+        if not lines:
+            lines = ["(No friendly summary available)"]
+        for line in lines:
+            entry = Gtk.Label(label=line)
+            entry.add_css_class("info-label")
+            entry.set_halign(Gtk.Align.START)
+            entry.set_xalign(0)
+            entry.set_wrap(True)
+            entry.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            stripped = line.strip()
+            if stripped.startswith("• Add "):
+                entry.add_css_class("diff-summary-add")
+            elif stripped.startswith("• Update "):
+                entry.add_css_class("diff-summary-update")
+            elif stripped.startswith("• Remove "):
+                entry.add_css_class("diff-summary-remove")
+            summary_box.append(entry)
 
         diff_label = Gtk.Label(label="Unified diff")
         diff_label.add_css_class("section-title")
