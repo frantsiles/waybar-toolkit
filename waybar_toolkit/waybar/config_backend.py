@@ -9,7 +9,6 @@ from pathlib import Path
 from shutil import copy2
 from typing import Any
 
-
 DEFAULT_WAYBAR_CONFIG = Path.home() / ".config" / "waybar" / "config.jsonc"
 DEFAULT_BACKUP_DIR = (
     Path.home() / ".config" / "waybar-toolkit" / "waybar-backups"
@@ -93,6 +92,259 @@ def _strip_trailing_commas(text: str) -> str:
     return re.sub(r",(\s*[}\]])", r"\1", text)
 
 
+def _mask_jsonc_comments(text: str) -> str:
+    """Mask JSONC comments with spaces while preserving text length."""
+    out: list[str] = []
+    in_string = False
+    in_single_comment = False
+    in_multi_comment = False
+    escaped = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+
+        if in_single_comment:
+            if ch == "\n":
+                in_single_comment = False
+                out.append("\n")
+            else:
+                out.append(" ")
+            i += 1
+            continue
+
+        if in_multi_comment:
+            if ch == "*" and nxt == "/":
+                out.append(" ")
+                out.append(" ")
+                in_multi_comment = False
+                i += 2
+            else:
+                out.append("\n" if ch == "\n" else " ")
+                i += 1
+            continue
+
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if ch == "/" and nxt == "/":
+            out.append(" ")
+            out.append(" ")
+            in_single_comment = True
+            i += 2
+            continue
+
+        if ch == "/" and nxt == "*":
+            out.append(" ")
+            out.append(" ")
+            in_multi_comment = True
+            i += 2
+            continue
+
+        out.append(ch)
+        if ch == '"':
+            in_string = True
+        i += 1
+
+    return "".join(out)
+
+
+def _skip_ws(text: str, index: int) -> int:
+    while index < len(text) and text[index] in " \t\r\n":
+        index += 1
+    return index
+
+
+def _parse_string_end(text: str, index: int) -> int:
+    if index >= len(text) or text[index] != '"':
+        raise WaybarConfigParseError("Expected string token")
+    i = index + 1
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == '"':
+            return i + 1
+        i += 1
+    raise WaybarConfigParseError("Unterminated string token")
+
+
+def _parse_compound_end(text: str, index: int) -> int:
+    stack = [text[index]]
+    i = index + 1
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if ch == '"':
+            in_string = True
+            i += 1
+            continue
+
+        if ch in "{[":
+            stack.append(ch)
+            i += 1
+            continue
+
+        if ch in "}]":
+            top = stack[-1]
+            expected = "}" if top == "{" else "]"
+            if ch != expected:
+                raise WaybarConfigParseError("Mismatched closing token")
+            stack.pop()
+            i += 1
+            if not stack:
+                return i
+            continue
+
+        i += 1
+
+    raise WaybarConfigParseError("Unterminated compound value")
+
+
+def _parse_number_end(text: str, index: int) -> int:
+    match = re.match(
+        r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+\-]?\d+)?",
+        text[index:],
+    )
+    if not match:
+        raise WaybarConfigParseError("Invalid number token")
+    return index + len(match.group(0))
+
+
+def _parse_json_value_end(text: str, index: int) -> int:
+    i = _skip_ws(text, index)
+    if i >= len(text):
+        raise WaybarConfigParseError("Missing value")
+    ch = text[i]
+    if ch == '"':
+        return _parse_string_end(text, i)
+    if ch in "{[":
+        return _parse_compound_end(text, i)
+    if text.startswith("true", i):
+        return i + 4
+    if text.startswith("false", i):
+        return i + 5
+    if text.startswith("null", i):
+        return i + 4
+    if ch == "-" or ch.isdigit():
+        return _parse_number_end(text, i)
+    raise WaybarConfigParseError("Unsupported value token")
+
+
+def _line_indent_before(text: str, index: int) -> str:
+    line_start = text.rfind("\n", 0, index) + 1
+    i = line_start
+    while i < len(text) and text[i] in " \t":
+        i += 1
+    return text[line_start:i]
+
+
+def _find_top_level_value_span(
+    original_text: str,
+    key: str,
+) -> tuple[int, int, int, str] | None:
+    """Return (key_start, value_start, value_end, key_indent) for a top-level key."""
+    masked = _mask_jsonc_comments(original_text)
+    i = _skip_ws(masked, 0)
+    if i >= len(masked) or masked[i] != "{":
+        raise WaybarConfigParseError("Config root must start with '{'")
+    i += 1
+
+    while i < len(masked):
+        i = _skip_ws(masked, i)
+        if i >= len(masked):
+            break
+        if masked[i] == "}":
+            return None
+
+        key_start = i
+        key_end = _parse_string_end(masked, i)
+        try:
+            current_key = json.loads(masked[key_start:key_end])
+        except json.JSONDecodeError as exc:
+            raise WaybarConfigParseError(
+                "Invalid key token in top-level object"
+            ) from exc
+
+        i = _skip_ws(masked, key_end)
+        if i >= len(masked) or masked[i] != ":":
+            raise WaybarConfigParseError("Expected ':' after key")
+        i += 1
+        i = _skip_ws(masked, i)
+
+        value_start = i
+        value_end = _parse_json_value_end(masked, value_start)
+
+        if current_key == key:
+            key_indent = _line_indent_before(original_text, key_start)
+            return (key_start, value_start, value_end, key_indent)
+
+        i = _skip_ws(masked, value_end)
+        if i < len(masked) and masked[i] == ",":
+            i += 1
+            continue
+        if i < len(masked) and masked[i] == "}":
+            return None
+        raise WaybarConfigParseError("Expected ',' or '}' after top-level value")
+
+    return None
+
+
+def _detect_indent_unit(text: str) -> str:
+    """Detect indentation style from top-level keys; fallback to 4 spaces."""
+    indents = [
+        match.group(1)
+        for match in re.finditer(r'(?m)^([ \t]+)"[^"]+"\s*:', text)
+    ]
+    if not indents:
+        return "    "
+    if any("\t" in indent for indent in indents):
+        return "\t"
+    min_len = min(len(indent) for indent in indents)
+    return " " * min_len if min_len > 0 else "    "
+
+
+def _serialize_value_for_jsonc(
+    value: Any,
+    *,
+    key_indent: str,
+    indent_unit: str,
+) -> str:
+    if isinstance(value, (dict, list)):
+        dumped = json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=indent_unit,
+        )
+        lines = dumped.splitlines()
+        if len(lines) == 1:
+            return dumped
+        return lines[0] + "".join(f"\n{key_indent}{line}" for line in lines[1:])
+    return json.dumps(value, ensure_ascii=False)
+
+
 class WaybarConfigManager:
     """Read/edit/save Waybar config and manage backups."""
 
@@ -105,6 +357,8 @@ class WaybarConfigManager:
         self._backup_dir = backup_dir or DEFAULT_BACKUP_DIR
         self._backup_dir.mkdir(parents=True, exist_ok=True)
         self._data: dict[str, Any] | None = None
+        self._original_text: str | None = None
+        self._dirty_keys: list[str] = []
 
     @property
     def config_path(self) -> Path:
@@ -131,18 +385,41 @@ class WaybarConfigManager:
                 "Waybar config root must be a JSON object"
             )
         self._data = parsed
+        self._original_text = raw
+        self._dirty_keys = []
         return parsed
 
     def save(self) -> None:
-        """Write current in-memory config as formatted JSON."""
+        """Write edited nodes while preserving surrounding JSONC/comments."""
         if self._data is None:
             self.load()
         assert self._data is not None
+        assert self._original_text is not None
+
+        if not self._dirty_keys:
+            return
+
+        text = self._original_text
+        indent_unit = _detect_indent_unit(text)
+        for key in self._dirty_keys:
+            span = _find_top_level_value_span(text, key)
+            if span is None:
+                raise WaybarConfigError(
+                    "Could not preserve formatting while saving. "
+                    f"Top-level node not found in source text: {key}"
+                )
+            _, value_start, value_end, key_indent = span
+            replacement = _serialize_value_for_jsonc(
+                self._data[key],
+                key_indent=key_indent,
+                indent_unit=indent_unit,
+            )
+            text = text[:value_start] + replacement + text[value_end:]
+
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
-        self._config_path.write_text(
-            json.dumps(self._data, indent=4, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        self._config_path.write_text(text, encoding="utf-8")
+        self._original_text = text
+        self._dirty_keys = []
 
     def get_node_keys(self) -> list[str]:
         """Return top-level node keys in insertion order."""
@@ -161,6 +438,8 @@ class WaybarConfigManager:
         data = self._data if self._data is not None else self.load()
         data[key] = value
         self._data = data
+        if key not in self._dirty_keys:
+            self._dirty_keys.append(key)
 
     def backup_now(self) -> Path:
         """Create a timestamped backup copy of the current config."""
@@ -185,5 +464,6 @@ class WaybarConfigManager:
             raise WaybarBackupError(f"Backup not found: {backup_name}")
         copy2(src, self._config_path)
         self._data = None
+        self._original_text = None
+        self._dirty_keys = []
         return self._config_path
-

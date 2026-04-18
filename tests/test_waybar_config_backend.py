@@ -40,6 +40,64 @@ def test_set_node_value_and_save(tmp_path: Path) -> None:
     data = reloaded.load()
     assert data["a"] == {"x": True, "n": 2}
 
+def test_save_preserves_comments_and_unedited_sections(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        """{
+    // global comment
+    "modules-right": ["clock", "cpu"], // keep-inline
+    "custom/toolkit": {
+        "format": "🔧"
+    },
+    /* keep block */
+    "layer": "top"
+}
+""",
+        encoding="utf-8",
+    )
+    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    manager.load()
+
+    manager.set_node_value(
+        "custom/toolkit",
+        {
+            "format": "🧩",
+            "on-click": "waybar-toolkit --waybar",
+        },
+    )
+    manager.save()
+
+    saved = config.read_text(encoding="utf-8")
+    assert "// global comment" in saved
+    assert '"modules-right": ["clock", "cpu"], // keep-inline' in saved
+    assert "/* keep block */" in saved
+    assert '"layer": "top"' in saved
+
+    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    data = reloaded.load()
+    assert data["custom/toolkit"]["format"] == "🧩"
+    assert data["custom/toolkit"]["on-click"] == "waybar-toolkit --waybar"
+
+
+def test_save_preserves_comment_between_value_and_comma(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        """{
+    "custom/toolkit": {"format": "🔧"} /* keep-this-comment */,
+    "layer": "top"
+}
+""",
+        encoding="utf-8",
+    )
+    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
+    manager.load()
+
+    manager.set_node_value("custom/toolkit", {"format": "X"})
+    manager.save()
+
+    saved = config.read_text(encoding="utf-8")
+    assert "/* keep-this-comment */" in saved
+
 
 def test_backup_and_restore(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
