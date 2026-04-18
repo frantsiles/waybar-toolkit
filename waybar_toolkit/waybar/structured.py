@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
+from difflib import unified_diff
 from typing import Any
 
 ALIGN_KEYS = ("modules-left", "modules-center", "modules-right")
@@ -54,6 +56,7 @@ LAYOUT_TEXT_KEYS = {
 LAYOUT_SUPPORTED_KEYS = (
     LAYOUT_NUMERIC_KEYS | LAYOUT_BOOLEAN_KEYS | LAYOUT_TEXT_KEYS
 )
+STRUCTURED_EDIT_KEYS = tuple(sorted(LAYOUT_SUPPORTED_KEYS | set(ALIGN_KEYS)))
 
 
 def _parse_bool(value: Any) -> bool | None:
@@ -205,3 +208,164 @@ def build_module_catalog(data: Mapping[str, Any]) -> list[str]:
             add(str(key))
 
     return out
+
+
+def normalize_module_buckets(
+    buckets: Mapping[str, Any],
+) -> dict[str, list[str]]:
+    """Normalize module buckets into clean string lists per alignment key."""
+    normalized: dict[str, list[str]] = {key: [] for key in ALIGN_KEYS}
+    for align in ALIGN_KEYS:
+        raw = buckets.get(align, [])
+        values: list[str] = []
+        if isinstance(raw, str):
+            token = raw.strip()
+            if token:
+                values.append(token)
+        elif isinstance(raw, list):
+            for item in raw:
+                token = str(item).strip()
+                if token:
+                    values.append(token)
+        normalized[align] = values
+    return normalized
+
+
+def validate_layout_payload(raw_values: Mapping[str, Any]) -> list[str]:
+    """Return human-readable validation errors for layout form values."""
+    errors: list[str] = []
+    for key in sorted(LAYOUT_NUMERIC_KEYS):
+        raw = raw_values.get(key, "")
+        if isinstance(raw, str) and not raw.strip():
+            continue
+        if raw is None:
+            continue
+        if _parse_number(raw) is None:
+            errors.append(f"'{key}' must be a number.")
+
+    for key in sorted(LAYOUT_BOOLEAN_KEYS):
+        raw = raw_values.get(key, "")
+        if isinstance(raw, str) and not raw.strip():
+            continue
+        if raw is None:
+            continue
+        if _parse_bool(raw) is None:
+            errors.append(f"'{key}' must be true or false.")
+    return errors
+
+
+def compute_structured_changes(
+    current_data: Mapping[str, Any],
+    layout_payload: Mapping[str, Any],
+    module_buckets: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str], dict[str, Any]]:
+    """Compute top-level set/delete operations and full target values."""
+    target_values: dict[str, Any] = dict(layout_payload)
+    normalized_buckets = normalize_module_buckets(module_buckets)
+    for align in ALIGN_KEYS:
+        items = normalized_buckets.get(align, [])
+        if items:
+            target_values[align] = items
+
+    to_set: dict[str, Any] = {}
+    to_delete: list[str] = []
+    for key in STRUCTURED_EDIT_KEYS:
+        has_current = key in current_data
+        has_target = key in target_values
+        if has_target:
+            new_value = target_values[key]
+            if not has_current or current_data[key] != new_value:
+                to_set[key] = new_value
+            continue
+        if has_current:
+            to_delete.append(key)
+
+    return to_set, to_delete, target_values
+
+
+def build_structured_diff_preview(
+    current_data: Mapping[str, Any],
+    target_values: Mapping[str, Any],
+) -> str:
+    """Build unified diff for structured top-level keys."""
+    changed_keys = [
+        key
+        for key in STRUCTURED_EDIT_KEYS
+        if (key in current_data) != (key in target_values)
+        or (
+            key in current_data
+            and key in target_values
+            and current_data[key] != target_values[key]
+        )
+    ]
+    if not changed_keys:
+        return ""
+
+    before = {
+        key: current_data[key] for key in changed_keys if key in current_data
+    }
+    after = {
+        key: target_values[key] for key in changed_keys if key in target_values
+    }
+    before_text = json.dumps(before, ensure_ascii=False, indent=2, sort_keys=True)
+    after_text = json.dumps(after, ensure_ascii=False, indent=2, sort_keys=True)
+    return "\n".join(
+        unified_diff(
+            before_text.splitlines(),
+            after_text.splitlines(),
+            fromfile="current",
+            tofile="proposed",
+            lineterm="",
+        )
+    )
+
+
+def _preview_change_value(value: Any) -> str:
+    if isinstance(value, list):
+        items = [str(item) for item in value]
+        if not items:
+            return "[]"
+        if len(items) <= 4:
+            return "[" + ", ".join(items) + "]"
+        shown = ", ".join(items[:3])
+        return f"[{shown}, … +{len(items) - 3} more]"
+    if isinstance(value, dict):
+        keys = list(value.keys())
+        if not keys:
+            return "{}"
+        if len(keys) <= 3:
+            return "{ " + ", ".join(str(key) for key in keys) + " }"
+        return "{ " + ", ".join(str(key) for key in keys[:3]) + ", … }"
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def build_structured_change_summary(
+    current_data: Mapping[str, Any],
+    target_values: Mapping[str, Any],
+) -> str:
+    """Build a human-readable summary of structured key changes."""
+    lines: list[str] = []
+    for key in STRUCTURED_EDIT_KEYS:
+        has_current = key in current_data
+        has_target = key in target_values
+        if not has_current and not has_target:
+            continue
+        if has_current and not has_target:
+            previous = _preview_change_value(current_data[key])
+            lines.append(f"• Remove '{key}' (was: {previous})")
+            continue
+        if not has_current and has_target:
+            new_value = _preview_change_value(target_values[key])
+            lines.append(f"• Add '{key}': {new_value}")
+            continue
+        old_value = current_data[key]
+        new_value = target_values[key]
+        if old_value != new_value:
+            old_preview = _preview_change_value(old_value)
+            new_preview = _preview_change_value(new_value)
+            lines.append(
+                f"• Update '{key}': {old_preview} -> {new_preview}"
+            )
+    return "\n".join(lines)

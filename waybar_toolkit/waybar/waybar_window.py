@@ -18,11 +18,14 @@ from waybar_toolkit.waybar.config_backend import (
 from waybar_toolkit.waybar.structured import (
     ALIGN_KEYS,
     LAYOUT_BOOLEAN_KEYS,
-    LAYOUT_NUMERIC_KEYS,
-    LAYOUT_TEXT_KEYS,
     build_layout_payload,
     build_module_catalog,
+    build_structured_change_summary,
+    build_structured_diff_preview,
+    compute_structured_changes,
     extract_module_buckets,
+    normalize_module_buckets,
+    validate_layout_payload,
 )
 
 gi.require_version("Gtk", "4.0")
@@ -531,31 +534,61 @@ class WaybarConfigWindow(Gtk.Window):
                 "Cannot apply structured changes: config file not found."
             )
             return
+        layout_values = self._collect_layout_values()
+        errors = validate_layout_payload(layout_values)
+        if errors:
+            _StructuredValidationDialog(self, errors).present()
+            self._set_status("Structured validation failed")
+            return
+
+        layout_payload = build_layout_payload(layout_values)
+        normalized_buckets = normalize_module_buckets(self._module_buckets)
+        to_set, to_delete, target_values = compute_structured_changes(
+            self._config_data,
+            layout_payload,
+            normalized_buckets,
+        )
+        if not to_set and not to_delete:
+            self._set_status("No structured changes detected")
+            return
+        friendly_summary = build_structured_change_summary(
+            self._config_data,
+            target_values,
+        )
+
+        diff_text = build_structured_diff_preview(self._config_data, target_values)
+        dialog = _StructuredDiffDialog(
+            self,
+            friendly_summary,
+            diff_text,
+            len(to_set),
+            len(to_delete),
+        )
+        dialog.connect(
+            "response",
+            self._on_apply_structured_response,
+            to_set,
+            to_delete,
+        )
+        dialog.present()
+
+    def _on_apply_structured_response(
+        self,
+        dialog: _StructuredDiffDialog,
+        response_id: str,
+        to_set: dict[str, Any],
+        to_delete: list[str],
+    ) -> None:
+        if response_id != "ok":
+            dialog.close()
+            self._set_status("Structured changes canceled")
+            return
+        dialog.close()
         try:
-            layout_values = self._collect_layout_values()
-            layout_payload = build_layout_payload(layout_values)
-            layout_keys = (
-                set(LAYOUT_TEXT_KEYS)
-                | set(LAYOUT_NUMERIC_KEYS)
-                | set(LAYOUT_BOOLEAN_KEYS)
-            )
-            for key in layout_keys:
-                if key in layout_payload:
-                    self._manager.set_node_value(key, layout_payload[key])
-                else:
-                    self._manager.delete_node(key)
-
-            for align in ALIGN_KEYS:
-                items = [
-                    module.strip()
-                    for module in self._module_buckets.get(align, [])
-                    if module.strip()
-                ]
-                if items:
-                    self._manager.set_node_value(align, items)
-                else:
-                    self._manager.delete_node(align)
-
+            for key, value in to_set.items():
+                self._manager.set_node_value(key, value)
+            for key in to_delete:
+                self._manager.delete_node(key)
             self._manager.save()
             self._reload_nodes()
             self._set_status("Structured changes applied")
@@ -1049,6 +1082,163 @@ class _NodeEditorDialog(Gtk.Window):
 
     def show_error(self, message: str) -> None:
         self._error_label.set_text(message)
+
+class _StructuredValidationDialog(Gtk.Window):
+    """Dialog showing structured validation errors."""
+
+    def __init__(self, parent: Gtk.Window, errors: list[str]) -> None:
+        super().__init__(
+            title="Structured validation errors",
+            transient_for=parent,
+            modal=True,
+            default_width=520,
+            default_height=260,
+        )
+
+        main = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=8,
+            margin_start=12,
+            margin_end=12,
+            margin_top=12,
+            margin_bottom=12,
+        )
+        self.set_child(main)
+
+        title = Gtk.Label(label="Fix these issues before saving:")
+        title.add_css_class("section-title")
+        title.set_halign(Gtk.Align.START)
+        main.append(title)
+
+        lines = "\n".join(f"• {error}" for error in errors)
+        details = Gtk.Label(label=lines)
+        details.add_css_class("info-label")
+        details.set_halign(Gtk.Align.START)
+        details.set_xalign(0)
+        details.set_wrap(True)
+        details.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        main.append(details)
+
+        actions = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+            halign=Gtk.Align.END,
+        )
+        main.append(actions)
+
+        close_btn = Gtk.Button(label="Close")
+        close_btn.add_css_class("toolbar-button")
+        close_btn.connect("clicked", lambda *_: self.close())
+        actions.append(close_btn)
+
+
+class _StructuredDiffDialog(Gtk.Window):
+    """Dialog showing structured diff preview and confirmation action."""
+
+    def __init__(
+        self,
+        parent: Gtk.Window,
+        friendly_summary: str,
+        diff_text: str,
+        set_count: int,
+        delete_count: int,
+    ) -> None:
+        super().__init__(
+            title="Confirm structured changes",
+            transient_for=parent,
+            modal=True,
+            default_width=720,
+            default_height=520,
+        )
+        self._response_callback = None
+
+        main = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=8,
+            margin_start=12,
+            margin_end=12,
+            margin_top=12,
+            margin_bottom=12,
+        )
+        self.set_child(main)
+
+        summary = Gtk.Label(
+            label=(
+                f"Review changes before saving "
+                f"({set_count} update(s), {delete_count} removal(s))."
+            )
+        )
+        summary.add_css_class("info-label")
+        summary.set_halign(Gtk.Align.START)
+        summary.set_xalign(0)
+        main.append(summary)
+        summary_label = Gtk.Label(label="Friendly summary by key")
+        summary_label.add_css_class("section-title")
+        summary_label.set_halign(Gtk.Align.START)
+        main.append(summary_label)
+
+        summary_scroll = Gtk.ScrolledWindow()
+        summary_scroll.set_min_content_height(140)
+        main.append(summary_scroll)
+
+        summary_text = Gtk.TextView()
+        summary_text.set_monospace(False)
+        summary_text.set_editable(False)
+        summary_text.set_cursor_visible(False)
+        summary_text.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        summary_text.get_buffer().set_text(
+            friendly_summary or "(No friendly summary available)"
+        )
+        summary_scroll.set_child(summary_text)
+
+        diff_label = Gtk.Label(label="Unified diff")
+        diff_label.add_css_class("section-title")
+        diff_label.set_halign(Gtk.Align.START)
+        main.append(diff_label)
+
+        diff_scroll = Gtk.ScrolledWindow()
+        diff_scroll.set_vexpand(True)
+        main.append(diff_scroll)
+
+        diff_view = Gtk.TextView()
+        diff_view.set_monospace(True)
+        diff_view.set_editable(False)
+        diff_view.set_cursor_visible(False)
+        diff_view.set_wrap_mode(Gtk.WrapMode.NONE)
+        diff_view.get_buffer().set_text(diff_text or "(No textual diff)")
+        diff_scroll.set_child(diff_view)
+
+        actions = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+            halign=Gtk.Align.END,
+        )
+        main.append(actions)
+
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", self._on_cancel)
+        actions.append(cancel)
+
+        apply_btn = Gtk.Button(label="Apply")
+        apply_btn.add_css_class("toolbar-button")
+        apply_btn.connect("clicked", self._on_apply)
+        actions.append(apply_btn)
+
+    def connect(self, signal: str, callback, *user_data):
+        if signal == "response":
+            self._response_callback = (callback, user_data)
+        return self
+
+    def _emit_response(self, response_id: str) -> None:
+        if self._response_callback:
+            callback, user_data = self._response_callback
+            callback(self, response_id, *user_data)
+
+    def _on_cancel(self, *_args) -> None:
+        self._emit_response("cancel")
+
+    def _on_apply(self, *_args) -> None:
+        self._emit_response("ok")
 
 
 class _MissingConfigDialog(Gtk.Window):
