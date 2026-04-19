@@ -37,39 +37,35 @@ class GPUBackend:
         Prioritizes vendor-specific tools (nvidia-smi, etc.).
         """
         vendor = "Unknown"
-        info = {"vendor": vendor, "details": "Could not determine GPU vendor."}
+        details: Any = "Could not determine GPU vendor."
 
         # 1. Nvidia Detection (using nvidia-smi)
         if self._run_safe(["nvidia-smi"]) is not None:
             vendor = "Nvidia"
-            info["details"] = self._get_nvidia_info()
+            details = self._get_nvidia_info()
         # 2. Intel/AMD Detection (using lspci or similar)
         else:
-            # Fallback detection using lspci (common on Linux)
-            lspci_output = self._run_safe(["lspci", "-v", "2>/dev/null"])
+            lspci_output = self._run_safe(["lspci", "-v"])
             if lspci_output:
                 if "VGA compatible controller" in lspci_output:
-                    # Simple heuristic check for common vendors
                     if "NVIDIA" in lspci_output:
                         vendor = "Nvidia"
-                        info["details"] = self._get_nvidia_info()
+                        details = self._get_nvidia_info()
                     elif "Intel" in lspci_output:
                         vendor = "Intel"
-                        info["details"] = self._get_intel_info()
+                        details = self._get_intel_info()
                     elif "AMD" in lspci_output:
                         vendor = "AMD"
-                        info["details"] = self._get_amd_info()
+                        details = self._get_amd_info()
                     else:
                         vendor = "PCI Detected"
-                        info["details"] = f"PCI detected, but vendor not explicitly identified: {lspci_output[:500]}..."
+                        details = f"PCI detected, but vendor not explicitly identified: {lspci_output[:500]}..."
                 else:
-                    vendor = "Unknown"
-                    info["details"] = "No VGA controller detected via lspci."
+                    details = "No VGA controller detected via lspci."
             else:
-                vendor = "Unknown"
-                info["details"] = "Could not run lspci or no GPU detected."
+                details = "Could not run lspci or no GPU detected."
 
-        self.gpu_info = info
+        self.gpu_info = {"vendor": vendor, "details": details}
 
     def _get_nvidia_info(self) -> Dict[str, Any]:
         """Retrieves detailed information using nvidia-smi."""
