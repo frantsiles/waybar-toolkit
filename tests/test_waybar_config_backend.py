@@ -1,11 +1,21 @@
+"""Tests for the new WaybarConfig backend."""
+
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from waybar_toolkit.waybar.config_backend import WaybarConfigManager
+import pytest
+
+from waybar_toolkit.waybar.config_backend import WaybarConfig, WaybarConfigError
 
 
-def test_load_jsonc_with_comments_and_trailing_commas(tmp_path: Path) -> None:
+# ------------------------------------------------------------------
+# Parsing
+# ------------------------------------------------------------------
+
+
+def test_load_jsonc_strips_comments_and_trailing_commas(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(
         """
@@ -19,219 +29,163 @@ def test_load_jsonc_with_comments_and_trailing_commas(tmp_path: Path) -> None:
         """,
         encoding="utf-8",
     )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-
-    data = manager.load()
-
-    assert data["modules-right"] == ["clock", "cpu"]
-    assert data["custom/toolkit"]["format"] == "🔧"
+    cfg = WaybarConfig(config)
+    assert cfg.get_modules("modules-right") == ["clock", "cpu"]
 
 
-def test_set_node_value_and_save(tmp_path: Path) -> None:
-    config = tmp_path / "config.jsonc"
-    config.write_text('{"a": 1}', encoding="utf-8")
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    manager.load()
-
-    manager.set_node_value("a", {"x": True, "n": 2})
-    manager.save()
-
-    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    data = reloaded.load()
-    assert data["a"] == {"x": True, "n": 2}
-
-
-def test_set_config_path_switches_active_file(tmp_path: Path) -> None:
-    config_a = tmp_path / "a.jsonc"
-    config_b = tmp_path / "b.jsonc"
-    config_a.write_text('{"name": "a"}', encoding="utf-8")
-    config_b.write_text('{"name": "b"}', encoding="utf-8")
-
-    manager = WaybarConfigManager(config_path=config_a, backup_dir=tmp_path / "bk")
-    data_a = manager.load()
-    assert data_a["name"] == "a"
-
-    manager.set_config_path(config_b)
-    data_b = manager.load()
-    assert data_b["name"] == "b"
-    assert manager.config_path == config_b
-
-
-def test_load_multibar_config_and_switch_active_bar(tmp_path: Path) -> None:
+def test_load_multibar_config(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(
-        """[
-  {"name": "primary", "layer": "top"},
-  {"name": "secondary", "layer": "bottom"}
-]
-""",
+        '[{"name": "primary"}, {"name": "secondary"}]',
         encoding="utf-8",
     )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-
-    first = manager.load()
-    assert first["name"] == "primary"
-    assert manager.bar_count == 2
-    assert manager.active_bar_index == 0
-
-    manager.set_active_bar_index(1)
-    second = manager.get_active_bar_data()
-    assert second["name"] == "secondary"
-    assert manager.active_bar_index == 1
+    cfg = WaybarConfig(config)
+    assert cfg.bar_count == 2
+    assert cfg.bar_names == ["primary", "secondary"]
 
 
-def test_save_updates_only_selected_bar_in_multibar_config(tmp_path: Path) -> None:
+def test_select_bar_switches_active(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
     config.write_text(
-        """[
-  {"name": "primary", "modules-right": ["clock"]},
-  {"name": "secondary", "modules-right": ["cpu"]}
-]
-""",
+        '[{"modules-left": ["a"]}, {"modules-left": ["b"]}]',
         encoding="utf-8",
     )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    manager.load()
-    manager.set_active_bar_index(1)
-    manager.set_node_value("modules-right", ["cpu", "memory"])
-    manager.save()
+    cfg = WaybarConfig(config)
+    assert cfg.get_modules("modules-left") == ["a"]
+    cfg.select_bar(1)
+    assert cfg.get_modules("modules-left") == ["b"]
 
-    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    bar_zero = reloaded.load()
-    assert bar_zero["modules-right"] == ["clock"]
-    reloaded.set_active_bar_index(1)
-    bar_one = reloaded.get_active_bar_data()
-    assert bar_one["modules-right"] == ["cpu", "memory"]
 
-def test_delete_node_removes_key_from_saved_config(tmp_path: Path) -> None:
+def test_load_raises_on_bad_json(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
-    config.write_text(
-        """{
-  "layer": "top",
-  "modules-right": ["clock"],
-  "position": "top"
-}
-""",
-        encoding="utf-8",
-    )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "bk")
-    manager.load()
-
-    manager.delete_node("modules-right")
-    manager.save()
-
-    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "bk")
-    data = reloaded.load()
-    assert "modules-right" not in data
-    assert data["layer"] == "top"
+    config.write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(WaybarConfigError):
+        WaybarConfig(config)
 
 
-def test_create_new_config_at_custom_path(tmp_path: Path) -> None:
-    custom = tmp_path / "nested" / "my-waybar.jsonc"
-    manager = WaybarConfigManager(
-        config_path=tmp_path / "unused.jsonc",
-        backup_dir=tmp_path / "bk",
-    )
-
-    created = manager.create_new_config(custom)
-
-    assert created == custom
-    assert created.exists()
-    assert created.read_text(encoding="utf-8") == "{\n}\n"
-    assert manager.config_path == custom
+def test_load_raises_on_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(WaybarConfigError):
+        WaybarConfig(tmp_path / "nonexistent.jsonc")
 
 
-def test_save_rewrites_json_without_comments(tmp_path: Path) -> None:
+# ------------------------------------------------------------------
+# Module operations
+# ------------------------------------------------------------------
+
+
+def test_get_modules_returns_list_for_string_value(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
-    config.write_text(
-        """{
-    // global comment
-    "modules-right": ["clock", "cpu"], // keep-inline
-    "custom/toolkit": {
-        "format": "🔧"
-    },
-    /* keep block */
-    "layer": "top"
-}
-""",
-        encoding="utf-8",
-    )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    manager.load()
+    config.write_text('{"modules-left": "clock"}', encoding="utf-8")
+    cfg = WaybarConfig(config)
+    assert cfg.get_modules("modules-left") == ["clock"]
 
-    manager.set_node_value(
-        "custom/toolkit",
-        {
-            "format": "🧩",
-            "on-click": "waybar-toolkit --waybar",
-        },
-    )
-    manager.save()
 
-    saved = config.read_text(encoding="utf-8")
-    assert "// global comment" not in saved
-    assert "/* keep block */" not in saved
-    assert "// keep-inline" not in saved
-    assert '"layer": "top"' in saved
-    assert '"on-click": "waybar-toolkit --waybar"' in saved
-
-    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    data = reloaded.load()
-    assert data["custom/toolkit"]["format"] == "🧩"
-    assert data["custom/toolkit"]["on-click"] == "waybar-toolkit --waybar"
-
-def test_save_removes_comments_between_value_and_comma(tmp_path: Path) -> None:
+def test_get_modules_returns_empty_for_missing_key(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
-    config.write_text(
-        """{
-    "custom/toolkit": {"format": "🔧"} /* keep-this-comment */,
-    "layer": "top"
-}
-""",
-        encoding="utf-8",
-    )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    manager.load()
-
-    manager.set_node_value("custom/toolkit", {"format": "X"})
-    manager.save()
-
-    saved = config.read_text(encoding="utf-8")
-    assert "/* keep-this-comment */" not in saved
+    config.write_text("{}", encoding="utf-8")
+    cfg = WaybarConfig(config)
+    assert cfg.get_modules("modules-left") == []
 
 
-def test_save_allows_new_top_level_keys(tmp_path: Path) -> None:
+def test_set_modules_updates_in_memory(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
-    config.write_text(
-        """{
-    // initial comment
-    "layer": "top"
-}
-""",
-        encoding="utf-8",
-    )
-    manager = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    manager.load()
-
-    manager.set_node_value("modules-right", ["clock", "cpu"])
-    manager.save()
-
-    reloaded = WaybarConfigManager(config_path=config, backup_dir=tmp_path / "b")
-    data = reloaded.load()
-    assert data["layer"] == "top"
-    assert data["modules-right"] == ["clock", "cpu"]
+    config.write_text('{"modules-left": ["clock"]}', encoding="utf-8")
+    cfg = WaybarConfig(config)
+    cfg.set_modules("modules-left", ["clock", "memory"])
+    assert cfg.get_modules("modules-left") == ["clock", "memory"]
 
 
-def test_backup_and_restore(tmp_path: Path) -> None:
+# ------------------------------------------------------------------
+# Save / backup / restore
+# ------------------------------------------------------------------
+
+
+def test_save_writes_correct_json(tmp_path: Path) -> None:
     config = tmp_path / "config.jsonc"
-    backups = tmp_path / "backups"
-    config.write_text('{"v": 1}', encoding="utf-8")
-    manager = WaybarConfigManager(config_path=config, backup_dir=backups)
+    config.write_text('{"modules-left": ["clock"]}', encoding="utf-8")
+    cfg = WaybarConfig(config)
+    cfg.set_modules("modules-left", ["clock", "cpu"])
+    cfg.save()
 
-    backup = manager.backup_now()
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["modules-left"] == ["clock", "cpu"]
+
+
+def test_save_creates_backup(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text('{"modules-left": []}', encoding="utf-8")
+    cfg = WaybarConfig(config)
+    backup = cfg.save()
     assert backup.exists()
+    assert backup.parent.name == "backups"
 
-    config.write_text('{"v": 99}', encoding="utf-8")
-    manager.restore_backup(backup.name)
 
-    assert config.read_text(encoding="utf-8") == '{"v": 1}'
+def test_save_is_atomic_on_error(tmp_path: Path) -> None:
+    """No tmp file should remain if write fails."""
+    config = tmp_path / "config.jsonc"
+    config.write_text("{}", encoding="utf-8")
+    cfg = WaybarConfig(config)
+    # Make parent read-only to force failure
+    config.parent.chmod(0o555)
+    try:
+        with pytest.raises(Exception):
+            cfg.save()
+        tmps = list(tmp_path.glob("*.tmp"))
+        assert tmps == [], f"Leaked tmp files: {tmps}"
+    finally:
+        config.parent.chmod(0o755)
+
+
+def test_save_preserves_other_keys(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        '{"layer": "top", "modules-left": ["clock"]}', encoding="utf-8"
+    )
+    cfg = WaybarConfig(config)
+    cfg.set_modules("modules-left", ["cpu"])
+    cfg.save()
+
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["layer"] == "top"
+    assert data["modules-left"] == ["cpu"]
+
+
+def test_save_multibar_only_modifies_selected_bar(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text(
+        '[{"modules-left": ["clock"]}, {"modules-left": ["cpu"]}]',
+        encoding="utf-8",
+    )
+    cfg = WaybarConfig(config)
+    cfg.select_bar(1)
+    cfg.set_modules("modules-left", ["cpu", "memory"])
+    cfg.save()
+
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data[0]["modules-left"] == ["clock"]
+    assert data[1]["modules-left"] == ["cpu", "memory"]
+
+
+def test_restore_backup(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text('{"modules-left": ["clock"]}', encoding="utf-8")
+    cfg = WaybarConfig(config)
+    backup = cfg.save()
+
+    # Corrupt the config
+    config.write_text('{"modules-left": ["BROKEN"]}', encoding="utf-8")
+
+    cfg.restore_backup(backup)
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["modules-left"] == ["clock"]
+
+
+def test_list_backups_sorted_newest_first(tmp_path: Path) -> None:
+    config = tmp_path / "config.jsonc"
+    config.write_text("{}", encoding="utf-8")
+    cfg = WaybarConfig(config)
+    b1 = cfg.save()
+    b2 = cfg.save()
+    backups = cfg.list_backups()
+    assert backups[0] == b2
+    assert backups[1] == b1
