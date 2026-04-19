@@ -1235,7 +1235,7 @@ class WaybarConfigWindow(Gtk.Window):
 
                 click = Gtk.GestureClick.new()
                 click.connect(
-                    "pressed",
+                    "released",
                     self._on_module_row_pressed,
                     align,
                     idx,
@@ -1280,17 +1280,41 @@ class WaybarConfigWindow(Gtk.Window):
         self._drag_source_align = align
         self._drag_source_index = index
         token = f"{align}:{index}:{module_name}"
-        return Gdk.ContentProvider.new_for_value(token)
+        content_value = GObject.Value()
+        content_value.init(GObject.TYPE_STRING)
+        content_value.set_string(token)
+        return Gdk.ContentProvider.new_for_value(content_value)
+
+    def _sync_drag_source_from_value(self, value: Any) -> None:
+        if isinstance(value, bytes):
+            token = value.decode("utf-8", errors="ignore")
+        elif isinstance(value, str):
+            token = value
+        else:
+            token = str(value)
+        parts = token.split(":", 2)
+        if len(parts) < 2:
+            return
+        source_align = parts[0].strip()
+        if source_align not in ALIGN_KEYS:
+            return
+        try:
+            source_index = int(parts[1])
+        except ValueError:
+            return
+        self._drag_source_align = source_align
+        self._drag_source_index = source_index
 
     def _on_module_drop_on_row(
         self,
         _target: Gtk.DropTarget,
-        _value: str,
+        value: str,
         _x: float,
         _y: float,
         target_align: str,
         target_index: int,
     ) -> bool:
+        self._sync_drag_source_from_value(value)
         col = self._module_columns.get(target_align)
         if col:
             col.remove_css_class("module-column-drop-target")
@@ -1299,11 +1323,12 @@ class WaybarConfigWindow(Gtk.Window):
     def _on_module_drop_on_column(
         self,
         _target: Gtk.DropTarget,
-        _value: str,
+        value: str,
         _x: float,
         _y: float,
         target_align: str,
     ) -> bool:
+        self._sync_drag_source_from_value(value)
         col = self._module_columns.get(target_align)
         if col:
             col.remove_css_class("module-column-drop-target")
@@ -1312,10 +1337,11 @@ class WaybarConfigWindow(Gtk.Window):
     def _on_module_drop_on_trash(
         self,
         _target: Gtk.DropTarget,
-        _value: str,
+        value: str,
         _x: float,
         _y: float,
     ) -> bool:
+        self._sync_drag_source_from_value(value)
         if self._module_trash_zone:
             self._module_trash_zone.remove_css_class(
                 "module-trash-zone-drop-target"
