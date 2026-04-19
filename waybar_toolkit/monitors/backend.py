@@ -358,7 +358,8 @@ class MonitorBackend:
     """Unified monitor backend that auto-selects the right tool."""
 
     def __init__(self) -> None:
-        self.gpu_backend = GPUBackend() # Initialize the GPU backend
+        self.compositor = detect_compositor()
+        self.gpu_backend = GPUBackend()
 
     def get_monitors(self) -> list[Monitor]:
         """Get list of connected monitors."""
