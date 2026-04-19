@@ -35,6 +35,7 @@ class BrightnessBackend:
         self._backlight_device: Optional[str] = None
         self._backlight_max: int = 100
         self._ddc_displays: dict[str, int] = {}  # monitor_name -> display_number
+        self._ddc_by_model: dict[str, int] = {}  # edid_model -> display_number (fallback)
         self._detect_devices()
 
     def _detect_devices(self) -> None:
@@ -68,23 +69,45 @@ class BrightnessBackend:
                 break
 
     def _detect_ddc(self) -> None:
-        """Find DDC/CI displays via ddcutil detect."""
+        """Find DDC/CI displays via ddcutil detect.
+
+        Builds two maps:
+        - _ddc_displays: DRM connector name → display number (preferred)
+        - _ddc_by_model: EDID model string → display number (fallback when
+          ddcutil cannot determine the DRM connector, e.g. some HDMI setups)
+        """
         output = _run_safe(["ddcutil", "detect"])
         if not output:
             return
 
         display_num: Optional[int] = None
+        edid_model: Optional[str] = None
+        has_connector = False
         is_valid = True
 
         for line in output.splitlines():
             display_match = re.match(r"Display\s+(\d+)", line.strip())
             if display_match:
+                # Flush previous display that had no connector
+                if display_num is not None and is_valid and not has_connector and edid_model:
+                    self._ddc_by_model[edid_model] = display_num
                 display_num = int(display_match.group(1))
+                edid_model = None
+                has_connector = False
                 is_valid = True
 
             if line.startswith("Invalid display"):
+                # Flush the previous valid display that had no DRM connector
+                if display_num is not None and is_valid and not has_connector and edid_model:
+                    self._ddc_by_model[edid_model] = display_num
                 is_valid = False
                 display_num = None
+                edid_model = None
+                has_connector = False
+
+            model_match = re.match(r"\s*Model:\s+(.+)", line)
+            if model_match and display_num is not None and is_valid:
+                edid_model = model_match.group(1).strip()
 
             connector_match = re.match(
                 r"\s*DRM_connector:\s+card\d+-(.+)", line
@@ -92,10 +115,63 @@ class BrightnessBackend:
             if connector_match and display_num is not None and is_valid:
                 monitor_name = connector_match.group(1).strip()
                 self._ddc_displays[monitor_name] = display_num
+                has_connector = True
+
+        # Flush last display
+        if display_num is not None and is_valid and not has_connector and edid_model:
+            self._ddc_by_model[edid_model] = display_num
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def is_ddc_available(self, monitor_name: str, model: str = "") -> bool:
+        """Check if DDC/CI is available, by connector name or EDID model fallback."""
+        return monitor_name in self._ddc_displays or (
+            bool(model) and model in self._ddc_by_model
+        )
+
+    def query_vcp(
+        self, monitor_name: str, vcp_code: int, model: str = ""
+    ) -> Optional[tuple[int, int]]:
+        """Query a VCP code via DDC/CI.
+
+        Returns (current_value, max_value) or None if unavailable.
+        Tries connector-name lookup first, then EDID model as fallback.
+        """
+        display = self._ddc_displays.get(monitor_name)
+        if display is None and model:
+            display = self._ddc_by_model.get(model)
+        if display is None:
+            return None
+        output = _run_safe(
+            [
+                "ddcutil",
+                "getvcp",
+                f"{vcp_code:02X}",
+                "--display",
+                str(display),
+                "--brief",
+            ],
+            timeout=8,
+        )
+        if output:
+            for line in output.splitlines():
+                parts = line.strip().split()
+                if len(parts) < 3 or parts[0].upper() != "VCP":
+                    continue
+                kind = parts[2].upper()
+                try:
+                    if kind == "C" and len(parts) >= 5:
+                        # Continuous: "VCP XX C <current> <max>"
+                        return int(parts[3]), int(parts[4])
+                    elif kind == "SNC" and len(parts) >= 4:
+                        # Simple non-continuous: "VCP XX SNC x<hex>"
+                        val = int(parts[3].lstrip("x"), 16)
+                        return val, val
+                except ValueError:
+                    continue
+        return None
 
     def supports_brightness(self, monitor_name: str) -> bool:
         """Check if brightness control is available for a monitor."""

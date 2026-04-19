@@ -20,6 +20,7 @@ from waybar_toolkit.monitors.brightness import BrightnessBackend
 from waybar_toolkit.monitors.monitor_canvas import MonitorCanvas
 from waybar_toolkit.monitors.identify import show_identify
 from waybar_toolkit.monitors.profiles import ProfileManager
+from waybar_toolkit.monitors.info import MonitorInfoPanel
 
 
 CSS = """
@@ -346,6 +347,9 @@ class MonitorWindow(Gtk.Window):
 
         # --- Brightness / Contrast section ---
         self._build_brightness_controls(mon)
+
+        # --- Monitor Info panel (EDID + DDC/CI) ---
+        self._controls_box.append(MonitorInfoPanel(mon, self._brightness))
 
     def _build_brightness_controls(self, mon: Monitor) -> None:
         """Build brightness/contrast sliders for the given monitor."""
