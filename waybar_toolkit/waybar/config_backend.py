@@ -35,7 +35,7 @@ def _parse_jsonc(text: str) -> Any:
     text = re.sub(r"//[^\n]*", "", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     text = re.sub(r",(\s*[}\]])", r"\1", text)
-    return json.loads(text)
+    return json.loads(text, strict=False)
 
 
 class WaybarConfigError(Exception):
