@@ -31,9 +31,50 @@ def find_config() -> Optional[Path]:
     return None
 
 
+def _strip_jsonc(text: str) -> str:
+    """Strip JSONC comments without touching content inside strings."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            # Consume the whole string literal verbatim
+            out.append(c)
+            i += 1
+            while i < n:
+                c = text[i]
+                out.append(c)
+                if c == '\\':
+                    i += 1
+                    if i < n:
+                        out.append(text[i])
+                elif c == '"':
+                    break
+                i += 1
+        elif c == '/' and i + 1 < n:
+            if text[i + 1] == '/':
+                # Line comment — skip to end of line
+                while i < n and text[i] != '\n':
+                    i += 1
+                continue
+            elif text[i + 1] == '*':
+                # Block comment — skip to */
+                i += 2
+                while i < n - 1 and not (text[i] == '*' and text[i + 1] == '/'):
+                    i += 1
+                i += 2
+                continue
+            else:
+                out.append(c)
+        else:
+            out.append(c)
+        i += 1
+    return ''.join(out)
+
+
 def _parse_jsonc(text: str) -> Any:
-    text = re.sub(r"//[^\n]*", "", text)
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = _strip_jsonc(text)
     text = re.sub(r",(\s*[}\]])", r"\1", text)
     return json.loads(text, strict=False)
 
